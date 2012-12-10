@@ -17,7 +17,7 @@ import Control.Concurrent.MVar
   )
 -- import Control.Applicative ((<$>), (<*>), pure, (<|>))
 import qualified Network.Transport as NT (Transport)
-import Network.Transport.TCP (TransportInternals(socketBetween))
+import Network.Transport.TCP (TransportInternals)
 import Control.Distributed.Process
 import Control.Distributed.Process.Internal.Types()
 import Control.Distributed.Process.Node
@@ -25,7 +25,7 @@ import Control.Distributed.Process.Serializable()
 import Control.Distributed.Platform.Timer
 
 import Test.HUnit (Assertion)
-import Test.Framework (Test, defaultMain, testGroup)
+import Test.Framework (Test, testGroup)
 import Test.Framework.Providers.HUnit (testCase)
 import Test.HUnit.Base (assertBool)
 
