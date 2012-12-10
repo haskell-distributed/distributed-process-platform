@@ -125,7 +125,6 @@ testTimerFlush result = do
   let delay = seconds 1
   self <- getSelfPid
   ref  <- ticker delay self
-  _    <- monitor ref
   
   -- sleep so we *should* have a message in our 'mailbox'
   sleep $ milliseconds 1500
