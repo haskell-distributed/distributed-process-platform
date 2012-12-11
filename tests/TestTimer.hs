@@ -4,13 +4,9 @@
 module TestTimer where
 
 import Prelude hiding (catch)
-import Data.Binary (Binary(..))
-import Data.Typeable (Typeable)
-import Data.DeriveTH
 import Control.Monad (forever)
 import Control.Concurrent.MVar
-  ( MVar
-  , newEmptyMVar
+  ( newEmptyMVar
   , putMVar
   , takeMVar
   , withMVar
@@ -24,16 +20,10 @@ import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
 import Control.Distributed.Platform.Timer
 
-import Test.HUnit (Assertion)
 import Test.Framework (Test, testGroup)
 import Test.Framework.Providers.HUnit (testCase)
-import Test.HUnit.Base (assertBool)
 
-type TestResult a = MVar a
-
-data Ping = Ping
-    deriving (Typeable)
-$(derive makeBinary ''Ping)
+import TestUtils
 
 testSendAfter :: TestResult Bool -> Process ()
 testSendAfter result =  do
@@ -140,24 +130,6 @@ testTimerFlush result = do
 --------------------------------------------------------------------------------
 -- Utilities and Plumbing                                                     --
 --------------------------------------------------------------------------------
-
-delayedAssertion :: (Eq a) => String -> LocalNode -> a ->
-                    (TestResult a -> Process ()) -> Assertion
-delayedAssertion note localNode expected testProc = do
-  result <- newEmptyMVar
-  _ <- forkProcess localNode $ testProc result
-  assertComplete note result expected
-
-assertComplete :: (Eq a) => String -> MVar a -> a -> IO ()
-assertComplete msg mv a = do
-    b <- takeMVar mv
-    assertBool msg (a == b)
-
-noop :: Process ()
-noop = return ()
-
-stash :: TestResult a -> a -> Process ()
-stash mvar x = liftIO $ putMVar mvar x
 
 tests :: LocalNode  -> [Test]
 tests localNode = [
