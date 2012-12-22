@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable        #-}
 {-# LANGUAGE TemplateHaskell           #-}
 
-module TestTimer where
+module Main where
 
 import Prelude hiding (catch)
 import Control.Monad (forever)
@@ -13,9 +13,9 @@ import Control.Concurrent.MVar
   )
 -- import Control.Applicative ((<$>), (<*>), pure, (<|>))
 import qualified Network.Transport as NT (Transport)
-import Network.Transport.TCP (TransportInternals)
-import Control.Distributed.Process
+import Network.Transport.TCP()
 import Control.Distributed.Platform
+import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
 import Control.Distributed.Platform.Timer
@@ -134,31 +134,39 @@ testTimerFlush result = do
 tests :: LocalNode  -> [Test]
 tests localNode = [
     testGroup "Timer Tests" [
-        testCase "testSendAfter"    (delayedAssertion
-                                     "expected Ping within 1 second"
-                                     localNode True testSendAfter)
-      , testCase "testRunAfter"     (delayedAssertion
-                                     "expecting run (which pings parent) within 2 seconds"
-                                     localNode True testRunAfter)
-      , testCase "testCancelTimer"  (delayedAssertion
-                                     "expected cancelTimer to exit the timer process normally"
-                                     localNode
-                                     True
-                                     testCancelTimer)
-      , testCase "testPeriodicSend" (delayedAssertion
-                                     "expected ten Ticks to have been sent before exiting"
-                                     localNode True testPeriodicSend)
-      , testCase "testTimerReset"   (delayedAssertion
-                                     "expected no Ticks to have been sent before resetting"
-                                     localNode 0 testTimerReset)
-      , testCase "testTimerFlush"   (delayedAssertion
-                                     "expected all Ticks to have been flushed"
-                                     localNode True testTimerFlush)
+        testCase "testSendAfter"
+                 (delayedAssertion
+                  "expected Ping within 1 second"
+                  localNode True testSendAfter)
+      , testCase "testRunAfter"
+                 (delayedAssertion
+                  "expecting run (which pings parent) within 2 seconds"
+                  localNode True testRunAfter)
+      , testCase "testCancelTimer"
+                 (delayedAssertion
+                  "expected cancelTimer to exit the timer process normally"
+                  localNode True testCancelTimer)
+      , testCase "testPeriodicSend"
+                 (delayedAssertion
+                  "expected ten Ticks to have been sent before exiting"
+                  localNode True testPeriodicSend)
+      , testCase "testTimerReset"
+                 (delayedAssertion
+                  "expected no Ticks to have been sent before resetting"
+                  localNode 0 testTimerReset)
+      , testCase "testTimerFlush"
+                 (delayedAssertion
+                  "expected all Ticks to have been flushed"
+                  localNode True testTimerFlush)
       ]
   ]
 
-timerTests :: NT.Transport -> TransportInternals -> IO [Test]
-timerTests transport _ = do
+timerTests :: NT.Transport -> IO [Test]
+timerTests transport = do
   localNode <- newLocalNode transport initRemoteTable
   let testData = tests localNode
   return testData
+
+main :: IO ()
+main = testMain $ timerTests
+  
