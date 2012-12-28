@@ -2,7 +2,7 @@
 {-# LANGUAGE TemplateHaskell           #-}
 {-# LANGUAGE ScopedTypeVariables       #-}
 
-module Main where
+module TestAsyncChan where
 
 import Control.Concurrent.MVar
   ( newEmptyMVar
@@ -156,11 +156,8 @@ tests localNode = [
       ]
   ]
 
-asyncTests :: NT.Transport -> IO [Test]
-asyncTests transport = do
+asyncChanTests :: NT.Transport -> IO [Test]
+asyncChanTests transport = do
   localNode <- newLocalNode transport initRemoteTable
   let testData = tests localNode
   return testData
-
-main :: IO ()
-main = testMain $ asyncTests
