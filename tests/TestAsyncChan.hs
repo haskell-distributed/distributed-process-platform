@@ -91,18 +91,18 @@ testAsyncLinked result = do
     -- that the worker is really dead then....
     stash result $ mref == mref'
 
-testAsyncWaitAny :: TestResult String -> Process ()
+testAsyncWaitAny :: TestResult [AsyncResult String] -> Process ()
 testAsyncWaitAny result = do
   p1 <- async $ expect >>= return
   p2 <- async $ expect >>= return
   p3 <- async $ expect >>= return
   send (worker p3) "c"
-  AsyncDone r1 <- waitAny [p1, p2, p3]
+  r1 <- waitAny [p1, p2, p3]
   send (worker p1) "a"
-  AsyncDone r2 <- waitAny [p1, p2, p3]
+  r2 <- waitAny [p1, p2, p3]
   send (worker p2) "b"
-  AsyncDone r3 <- waitAny [p1, p2, p3]
-  stash result $ foldl (++) "" [r1, r2, r3]
+  r3 <- waitAny [p1, p2, p3]
+  stash result $ [r1, r2, r3]
 
 testAsyncWaitAnyTimeout :: TestResult (Maybe (AsyncResult String)) -> Process ()
 testAsyncWaitAnyTimeout result = do
@@ -144,7 +144,9 @@ tests localNode = [
         , testCase "testAsyncWaitAny"
             (delayedAssertion
              "expected waitAny to mimic mergePortsBiased"
-             localNode "cab" testAsyncWaitAny)
+             localNode [AsyncDone "c",
+                        AsyncDone "a",
+                        AsyncDone "b"] testAsyncWaitAny)
         , testCase "testAsyncWaitAnyTimeout"
             (delayedAssertion
              "expected waitAnyTimeout to handle idle channels properly"
