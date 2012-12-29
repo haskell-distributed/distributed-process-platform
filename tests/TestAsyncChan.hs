@@ -71,7 +71,8 @@ testAsyncLinked :: TestResult Bool -> Process ()
 testAsyncLinked result = do
     mv :: MVar (AsyncChan ()) <- liftIO $ newEmptyMVar
     pid <- spawnLocal $ do
-        h <- asyncLinked $ do
+        -- NB: async == asyncLinked for AsyncChan
+        h <- async $ do
             "waiting" <- expect
             return ()
         stash mv h
