@@ -117,6 +117,7 @@ testLinkingWithNormalExits result = do
     worker <- spawnLocal $ do
       "finish" <- expect
       return ()
+    linkOnFailure worker
     send testPid worker
     () <- expect
     return ()
@@ -142,6 +143,32 @@ testLinkingWithNormalExits result = do
     ]
   stash result r
 
+testLinkingWithAbnormalExits :: TestResult (Maybe Bool) -> Process ()
+testLinkingWithAbnormalExits result = do
+  testPid <- getSelfPid
+  pid <- spawnLocal $ do
+    worker <- spawnLocal $ do
+      "finish" <- expect
+      return ()
+
+    linkOnFailure worker
+    send testPid worker
+    () <- expect
+    return ()
+
+  workerPid <- expect :: Process ProcessId
+
+  ref <- monitor pid
+  kill workerPid "finish"  -- note the use of 'kill' instead of send
+  r <- receiveTimeout (intervalToMs $ seconds 20) [
+      matchIf (\(ProcessMonitorNotification ref' _ _) -> ref == ref')
+              (\(ProcessMonitorNotification _ _ reason) -> return reason)
+    ]
+  case r of
+    Just (DiedException _) -> stash result $ Just True
+    (Just _)               -> stash result $ Just False
+    Nothing                -> stash result Nothing
+
 --------------------------------------------------------------------------------
 -- Utilities and Plumbing                                                     --
 --------------------------------------------------------------------------------
@@ -153,6 +180,10 @@ tests localNode = [
                  (delayedAssertion
                   "normal exit should not terminate the caller"
                   localNode DiedNormal testLinkingWithNormalExits)
+      , testCase "testLinkingWithAbnormalExits"
+                 (delayedAssertion
+                  "abnormal exit should terminate the caller"
+                  localNode (Just True) testLinkingWithAbnormalExits)
       ]
   ]
 
@@ -164,3 +195,4 @@ primitivesTests transport = do
 
 main :: IO ()
 main = testMain $ primitivesTests
+
