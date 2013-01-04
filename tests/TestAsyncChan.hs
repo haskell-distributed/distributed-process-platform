@@ -35,7 +35,7 @@ testAsyncCancel :: TestResult (AsyncResult ()) -> Process ()
 testAsyncCancel result = do
     hAsync <- async $ runTestProcess $ say "running" >> return ()
     sleep $ milliseconds 100
-    
+
     p <- poll hAsync -- nasty kind of assertion: use assertEquals?
     case p of
         AsyncPending -> cancel hAsync >> wait hAsync >>= stash result
@@ -52,20 +52,20 @@ testAsyncCancelWait result = do
 
       AsyncPending <- poll hAsync
       cancelWait hAsync >>= send testPid
-    
+
     "running" <- expect
     d <- expectTimeout (intervalToMs $ seconds 5)
     case d of
         Nothing -> kill p "timed out" >> stash result Nothing
         Just ar -> stash result (Just ar)
 
-testAsyncWaitTimeout :: TestResult (Maybe (AsyncResult ())) -> Process ()    
-testAsyncWaitTimeout result = 
+testAsyncWaitTimeout :: TestResult (Maybe (AsyncResult ())) -> Process ()
+testAsyncWaitTimeout result =
     let delay = seconds 1
     in do
     hAsync <- async $ sleep $ seconds 20
     waitTimeout delay hAsync >>= stash result
-    cancelWait hAsync >> return () 
+    cancelWait hAsync >> return ()
 
 testAsyncLinked :: TestResult Bool -> Process ()
 testAsyncLinked result = do
@@ -78,14 +78,14 @@ testAsyncLinked result = do
         stash mv h
         "sleeping" <- expect
         return ()
-    
+
     hAsync <- liftIO $ takeMVar mv
-    
+
     mref <- monitor $ worker hAsync
     exit pid "stop"
-    
+
     ProcessMonitorNotification mref' _ _ <- expect
-    
+
     -- since the initial caller died and we used 'asyncLinked', the async should
     -- pick up on the exit signal and set the result accordingly, however the
     -- ReceivePort is no longer valid, so we can't wait on it! We have to ensure
@@ -115,7 +115,7 @@ testAsyncWaitAnyTimeout result = do
 testAsyncCancelWith :: TestResult Bool -> Process ()
 testAsyncCancelWith result = do
   p1 <- async $ do { s :: String <- expect; return s }
-  cancelWith "foo" p1 
+  cancelWith "foo" p1
   AsyncFailed (DiedException _) <- wait p1
   stash result True
 
@@ -129,11 +129,11 @@ tests localNode = [
         , testCase "testAsyncPoll"
             (delayedAssertion
              "expected poll to return a valid AsyncResult"
-             localNode (AsyncDone ()) testAsyncPoll) 
+             localNode (AsyncDone ()) testAsyncPoll)
         , testCase "testAsyncCancelWait"
             (delayedAssertion
              "expected cancelWait to complete some time"
-             localNode (Just AsyncCancelled) testAsyncCancelWait) 
+             localNode (Just AsyncCancelled) testAsyncCancelWait)
         , testCase "testAsyncWaitTimeout"
             (delayedAssertion
              "expected waitTimeout to return Nothing when it times out"
