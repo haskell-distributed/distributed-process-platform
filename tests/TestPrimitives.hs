@@ -8,6 +8,7 @@ import Prelude hiding (catch)
 import qualified Network.Transport as NT (Transport)
 import Network.Transport.TCP()
 import Control.Distributed.Process.Platform
+import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
