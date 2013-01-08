@@ -7,7 +7,7 @@ import Prelude hiding (catch)
 -- import Control.Applicative ((<$>), (<*>), pure, (<|>))
 import qualified Network.Transport as NT (Transport)
 import Network.Transport.TCP()
-import Control.Distributed.Platform
+import Control.Distributed.Process.Platform
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
