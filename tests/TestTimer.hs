@@ -14,7 +14,6 @@ import Control.Concurrent.MVar
 -- import Control.Applicative ((<$>), (<*>), pure, (<|>))
 import qualified Network.Transport as NT (Transport)
 import Network.Transport.TCP()
-import Control.Distributed.Process.Platform
 import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
