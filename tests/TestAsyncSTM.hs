@@ -4,16 +4,11 @@
 
 module TestAsyncSTM where
 
-import Control.Concurrent.MVar
-  ( newEmptyMVar
-  , takeMVar
-  , MVar)
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
-import Control.Distributed.Platform
-import Control.Distributed.Platform.Async
-import Control.Distributed.Platform.Async.AsyncSTM
+import Control.Distributed.Process.Platform.Async
+import Control.Distributed.Process.Platform.Async.AsyncSTM
 import Data.Binary()
 import Data.Typeable()
 import qualified Network.Transport as NT (Transport)

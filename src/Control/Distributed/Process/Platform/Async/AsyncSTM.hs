@@ -26,7 +26,7 @@
 -- started on a local or remote node.
 -----------------------------------------------------------------------------
 
-module Control.Distributed.Platform.Async.AsyncSTM
+module Control.Distributed.Process.Platform.Async.AsyncSTM
   ( -- types/data
     AsyncRef
   , AsyncTask
@@ -54,8 +54,8 @@ module Control.Distributed.Platform.Async.AsyncSTM
 
 import Control.Applicative
 import Control.Concurrent.STM
-import Control.Distributed.Platform.Async
-import Control.Distributed.Platform.Internal.Types
+import Control.Distributed.Process.Platform.Async
+import Control.Distributed.Process.Platform.Internal.Types
   ( CancelWait(..)
   )
 import Control.Distributed.Process

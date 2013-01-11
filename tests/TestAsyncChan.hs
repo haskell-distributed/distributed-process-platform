@@ -11,8 +11,9 @@ import Control.Concurrent.MVar
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
-import Control.Distributed.Platform
-import Control.Distributed.Platform.Async.AsyncChan
+import Control.Distributed.Process.Platform
+import Control.Distributed.Process.Platform.Timer
+import Control.Distributed.Process.Platform.Async.AsyncChan
 import Data.Binary()
 import Data.Typeable()
 import qualified Network.Transport as NT (Transport)
