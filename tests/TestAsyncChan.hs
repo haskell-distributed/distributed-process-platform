@@ -11,7 +11,7 @@ import Control.Concurrent.MVar
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
-import Control.Distributed.Process.Platform
+import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process.Platform.Timer
 import Control.Distributed.Process.Platform.Async.AsyncChan
 import Data.Binary()
@@ -21,6 +21,7 @@ import Prelude hiding (catch)
 
 import Test.Framework (Test, testGroup)
 import Test.Framework.Providers.HUnit (testCase)
+import Control.Distributed.Process.Platform.Test
 import TestUtils
 
 testAsyncPoll :: TestResult (AsyncResult ()) -> Process ()

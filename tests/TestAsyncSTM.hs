@@ -16,6 +16,7 @@ import Prelude hiding (catch)
 
 import Test.Framework (Test, testGroup)
 import Test.Framework.Providers.HUnit (testCase)
+import Control.Distributed.Process.Platform.Test
 import TestUtils
 
 testAsyncPoll :: TestResult (AsyncResult ()) -> Process ()

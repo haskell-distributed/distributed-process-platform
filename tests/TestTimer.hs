@@ -14,7 +14,7 @@ import Control.Concurrent.MVar
 -- import Control.Applicative ((<$>), (<*>), pure, (<|>))
 import qualified Network.Transport as NT (Transport)
 import Network.Transport.TCP()
-import Control.Distributed.Process.Platform
+import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
@@ -23,6 +23,7 @@ import Control.Distributed.Process.Platform.Timer
 import Test.Framework (Test, testGroup)
 import Test.Framework.Providers.HUnit (testCase)
 
+import Control.Distributed.Process.Platform.Test
 import TestUtils
 
 testSendAfter :: TestResult Bool -> Process ()
@@ -120,7 +121,7 @@ testTimerFlush result = do
   sleep $ milliseconds 1500
   
   -- flush it out if it's there
-  flushTimer ref Tick (Timeout $ seconds 3)
+  flushTimer ref Tick (Delay $ seconds 3)
   
   m <- expectTimeout 10
   case m of

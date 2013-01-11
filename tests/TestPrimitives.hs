@@ -3,18 +3,25 @@
 
 module Main where
 
-import Prelude hiding (catch)
--- import Control.Applicative ((<$>), (<*>), pure, (<|>))
-import qualified Network.Transport as NT (Transport)
-import Network.Transport.TCP()
-import Control.Distributed.Process.Platform
+import Control.Concurrent (threadDelay)
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
 
+import Control.Distributed.Process.Platform hiding (__remoteTable)
+import qualified Control.Distributed.Process.Platform (__remoteTable)
+import Control.Distributed.Process.Platform.Time
+import Control.Distributed.Process.Platform.Call
+
+import qualified Network.Transport as NT (Transport)
+import Network.Transport.TCP()
+import Prelude hiding (catch)
+
+import Test.HUnit (Assertion)
 import Test.Framework (Test, testGroup)
 import Test.Framework.Providers.HUnit (testCase)
 
+import Control.Distributed.Process.Platform.Test
 import TestUtils
 
 testLinkingWithNormalExits :: TestResult DiedReason -> Process ()
@@ -76,12 +83,51 @@ testLinkingWithAbnormalExits result = do
     (Just _)               -> stash result $ Just False
     Nothing                -> stash result Nothing
 
+myRemoteTable :: RemoteTable
+myRemoteTable = Control.Distributed.Process.Platform.__remoteTable initRemoteTable
+
+multicallTest :: NT.Transport -> Assertion
+multicallTest transport =
+  do node1 <- newLocalNode transport myRemoteTable
+     tryRunProcess node1 $
+       do pid1 <- whereisOrStart "server1" server1
+          _ <- whereisOrStart "server2" server2
+          pid2 <- whereisOrStart "server2" server2
+          tag <- newTagPool
+
+          -- First test: expect positives answers from both processes
+          tag1 <- getTag tag
+          result1 <- multicall [pid1,pid2] mystr tag1 infiniteWait
+          case result1 of
+            [Just reversed, Just doubled] |
+                 reversed == reverse mystr && doubled == mystr ++ mystr -> return ()
+            _ -> error "Unmatched"
+
+          -- Second test: First process works, second thread throws an exception
+          tag2 <- getTag tag
+          [Just 10, Nothing] <- multicall [pid1,pid2] (5::Int) tag2 infiniteWait :: Process [Maybe Int]
+
+          -- Third test: First process exceeds time limit, second process is still dead
+          tag3 <- getTag tag
+          [Nothing, Nothing] <- multicall [pid1,pid2] (23::Int) tag3 (Just 1000000) :: Process [Maybe Int]
+          return ()
+    where server1 = receiveWait [callResponse (\str -> mention (str::String) (return (reverse str,())))]  >>
+                    receiveWait [callResponse (\i -> mention (i::Int) (return (i*2,())))] >>
+                    receiveWait [callResponse (\i -> liftIO (threadDelay 2000000) >> mention (i::Int) (return (i*10,())))]
+          server2 = receiveWait [callResponse (\str -> mention (str::String) (return (str++str,())))] >>
+                    receiveWait [callResponse (\i -> error "barf" >> mention (i::Int) (return (i :: Int,())))]
+          mystr = "hello"
+          mention :: a -> b -> b
+          mention _a b = b
+          
+
+
 --------------------------------------------------------------------------------
 -- Utilities and Plumbing                                                     --
 --------------------------------------------------------------------------------
 
-tests :: LocalNode  -> [Test]
-tests localNode = [
+tests :: NT.Transport -> LocalNode  -> [Test]
+tests transport localNode = [
     testGroup "Linking Tests" [
         testCase "testLinkingWithNormalExits"
                  (delayedAssertion
@@ -91,15 +137,17 @@ tests localNode = [
                  (delayedAssertion
                   "abnormal exit should terminate the caller"
                   localNode (Just True) testLinkingWithAbnormalExits)
-      ]
+      ],
+    testGroup "Call/RPC" [
+        testCase "multicallTest" (multicallTest transport)
+    ]
   ]
 
 primitivesTests :: NT.Transport -> IO [Test]
 primitivesTests transport = do
   localNode <- newLocalNode transport initRemoteTable
-  let testData = tests localNode
+  let testData = tests transport localNode
   return testData
 
 main :: IO ()
 main = testMain $ primitivesTests
-
