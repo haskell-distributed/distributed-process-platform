@@ -35,8 +35,8 @@ module Control.Distributed.Process.Platform.Async.AsyncSTM
   , async
   , asyncLinked
   -- and stopping/killing
---  , cancel
---  , cancelWait
+  , cancel
+  , cancelWait
 --  , cancelWith
 --  , cancelKill
   -- functions to query an async-result
@@ -45,7 +45,7 @@ module Control.Distributed.Process.Platform.Async.AsyncSTM
   , wait
   -- , waitAny
   -- , waitAnyTimeout
-  -- , waitTimeout
+  , waitTimeout
   -- , waitCheckTimeout
   -- STM versions
   , pollSTM
@@ -54,12 +54,14 @@ module Control.Distributed.Process.Platform.Async.AsyncSTM
 
 import Control.Applicative
 import Control.Concurrent.STM
+import Control.Distributed.Process
+import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Async
 import Control.Distributed.Process.Platform.Internal.Types
   ( CancelWait(..)
+  , Channel
   )
-import Control.Distributed.Process
-import Control.Distributed.Process.Serializable
+import Control.Distributed.Process.Platform.Time
 import Control.Monad
 import Data.Maybe
   ( fromMaybe
@@ -85,9 +87,6 @@ data AsyncSTM a = AsyncSTM {
 
 instance Eq (AsyncSTM a) where
   AsyncSTM a b _ == AsyncSTM c d _  =  a == c && b == d
-
--- instance Functor AsyncSTM where
---  fmap f (AsyncSTM a b w) = AsyncSTM a b (fmap (fmap f) w)
 
 -- | Spawns an asynchronous action in a new process.
 --
@@ -180,6 +179,39 @@ poll hAsync = do
 {-# INLINE wait #-}
 wait :: AsyncSTM a -> Process (AsyncResult a)
 wait = liftIO . atomically . waitSTM
+
+-- | Wait for an asynchronous operation to complete or timeout. Returns
+-- @Nothing@ if the 'AsyncResult' does not change from @AsyncPending@ within
+-- the specified delay, otherwise @Just asyncResult@ is returned. If you want
+-- to wait/block on the 'AsyncResult' without the indirection of @Maybe@ then
+-- consider using 'wait' or 'waitCheckTimeout' instead.
+waitTimeout :: (Serializable a) =>
+               TimeInterval -> AsyncSTM a -> Process (Maybe (AsyncResult a))
+waitTimeout t hAsync = do
+  (sp, rp) <- newChan :: (Serializable a) => Process (Channel (AsyncResult a))
+  pid <- spawnLocal $ wait hAsync >>= sendChan sp
+  receiveChanTimeout (intervalToMs t) rp `finally` kill pid "timeout"
+
+-- | Cancel an asynchronous operation. Cancellation is asynchronous in nature.
+-- To wait for cancellation to complete, use 'cancelWait' instead. The notes
+-- about the asynchronous nature of 'cancelWait' apply here also.
+--
+-- See 'Control.Distributed.Process'
+cancel :: AsyncSTM a -> Process ()
+cancel (AsyncSTM _ g _) = send g CancelWait
+
+-- | Cancel an asynchronous operation and wait for the cancellation to complete.
+-- Because of the asynchronous nature of message passing, the instruction to
+-- cancel will race with the asynchronous worker, so it is /entirely possible/
+-- that the 'AsyncResult' returned will not necessarily be 'AsyncCancelled'. For
+-- example, the worker may complete its task after this function is called, but
+-- before the cancellation instruction is acted upon.
+--
+-- If you wish to stop an asychronous operation /immediately/ (with caveats) then
+-- consider using 'cancelWith' or 'cancelKill' instead.
+--
+cancelWait :: (Serializable a) => AsyncSTM a -> Process (AsyncResult a)
+cancelWait hAsync = cancel hAsync >> wait hAsync
 
 -- | A version of 'wait' that can be used inside an STM transaction.
 --
