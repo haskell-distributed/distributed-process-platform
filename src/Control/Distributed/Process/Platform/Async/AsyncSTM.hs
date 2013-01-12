@@ -44,7 +44,7 @@ module Control.Distributed.Process.Platform.Async.AsyncSTM
   -- , check
   , wait
   , waitAny
-  -- , waitAnyTimeout
+  , waitAnyTimeout
   , waitTimeout
   -- , waitCheckTimeout
   -- STM versions
@@ -220,10 +220,20 @@ waitTimeoutSTM t hAsync =
 waitAny :: (Serializable a)
         => [AsyncSTM a]
         -> Process (AsyncResult a)
-waitAny asyncs =
-  liftIO $ atomically $
-    foldr orElse retry $
-      map (\a -> do r <- waitSTM a; return r) asyncs
+waitAny asyncs = do
+  r <- liftIO $ waitAnySTM asyncs
+  return $ snd r
+
+-- | Like 'waitAny' but times out after the specified delay.
+waitAnyTimeout :: (Serializable a)
+               => TimeInterval
+               -> [AsyncSTM a]
+               -> Process (Maybe (AsyncResult a))
+waitAnyTimeout delay asyncs =
+  let t' = asTimeout delay
+  in liftIO $ timeout t' $ do 
+    r <- waitAnySTM asyncs
+    return $ snd r
 
 -- | Cancel an asynchronous operation. Cancellation is asynchronous in nature.
 -- To wait for cancellation to complete, use 'cancelWait' instead. The notes
@@ -245,6 +255,13 @@ cancel (AsyncSTM _ g _) = send g CancelWait
 --
 cancelWait :: (Serializable a) => AsyncSTM a -> Process (AsyncResult a)
 cancelWait hAsync = cancel hAsync >> wait hAsync
+
+-- | STM version of 'waitAny'.
+waitAnySTM :: [AsyncSTM a] -> IO (AsyncSTM a, AsyncResult a)
+waitAnySTM asyncs =
+  atomically $
+    foldr orElse retry $
+      map (\a -> do r <- waitSTM a; return (a, r)) asyncs
 
 -- | A version of 'wait' that can be used inside an STM transaction.
 --
