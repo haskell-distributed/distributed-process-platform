@@ -43,7 +43,7 @@ module Control.Distributed.Process.Platform.Async.AsyncSTM
   , poll
   -- , check
   , wait
-  -- , waitAny
+  , waitAny
   -- , waitAnyTimeout
   , waitTimeout
   -- , waitCheckTimeout
@@ -208,6 +208,22 @@ waitTimeoutSTM :: (Serializable a)
 waitTimeoutSTM t hAsync = 
   let t' = (asTimeout t)
   in liftIO $ timeout t' $ atomically $ waitSTM hAsync
+
+-- | Wait for any of the supplied @AsyncChans@s to complete. If multiple
+-- 'Async's complete, then the value returned corresponds to the first
+-- completed 'Async' in the list.
+--
+-- NB: Unlike @AsyncChan@, 'AsyncSTM' does not discard its 'AsyncResult' once
+-- read, therefore the semantics of this function are different to the
+-- former.
+-- 
+waitAny :: (Serializable a)
+        => [AsyncSTM a]
+        -> Process (AsyncResult a)
+waitAny asyncs =
+  liftIO $ atomically $
+    foldr orElse retry $
+      map (\a -> do r <- waitSTM a; return r) asyncs
 
 -- | Cancel an asynchronous operation. Cancellation is asynchronous in nature.
 -- To wait for cancellation to complete, use 'cancelWait' instead. The notes

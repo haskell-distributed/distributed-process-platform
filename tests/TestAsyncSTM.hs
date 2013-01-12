@@ -132,6 +132,23 @@ testAsyncLinked result = do
         Nothing -> stash result True
         Just _  -> stash result False
 
+testAsyncWaitAny :: TestResult [AsyncResult String] -> Process ()
+testAsyncWaitAny result = do
+  p1 <- async $ expect >>= return
+  p2 <- async $ expect >>= return
+  p3 <- async $ expect >>= return
+  send (_asyncWorker p3) "c"
+  r1 <- waitAny [p1, p2, p3]
+  
+  send (_asyncWorker p1) "a"
+  send (_asyncWorker p2) "b"
+  sleep $ seconds 1
+  
+  r2 <- waitAny [p2, p3]
+  r3 <- waitAny [p1, p2, p3]
+  
+  stash result $ [r1, r2, r3]
+
 tests :: LocalNode  -> [Test]
 tests localNode = [
     testGroup "Handling async results" [
@@ -163,6 +180,12 @@ tests localNode = [
             (delayedAssertion
              "expected linked process to die with originator"
              localNode True testAsyncLinked)
+        , testCase "testAsyncWaitAny"
+            (delayedAssertion
+             "expected waitAny to mimic mergePortsBiased"
+             localNode [AsyncDone "c",
+                        AsyncDone "b",
+                        AsyncDone "a"] testAsyncWaitAny)
       ]
   ]
 
