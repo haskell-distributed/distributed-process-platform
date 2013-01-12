@@ -45,7 +45,7 @@ testAsyncCancelWait :: TestResult (Maybe (AsyncResult ())) -> Process ()
 testAsyncCancelWait result = do
     testPid <- getSelfPid
     p <- spawnLocal $ do
-      hAsync <- async $ runTestProcess $ say "running" >> (sleep $ seconds 60)
+      hAsync <- async $ runTestProcess $ sleep $ seconds 60
       sleep $ milliSeconds 100
 
       send testPid "running"
@@ -82,9 +82,7 @@ testAsyncWaitTimeoutSTM result =
     let delay = seconds 1
     in do
     hAsync <- async $ sleep $ seconds 20  
-    r <- waitTimeoutSTM delay hAsync
-    liftIO $ putStrLn $ "result: " ++ (show r)
-    stash result r
+    waitTimeoutSTM delay hAsync >>= stash result
 
 testAsyncWaitTimeoutCompletesSTM :: TestResult (Maybe (AsyncResult Int))
                                  -> Process ()
@@ -123,7 +121,7 @@ tests localNode = [
         , testCase "testAsyncWaitTimeoutSTM"
             (delayedAssertion
              "expected waitTimeoutSTM to return Nothing when it times out"
-             localNode (Nothing) testAsyncWaitTimeoutCompletesSTM)
+             localNode (Nothing) testAsyncWaitTimeoutSTM)
         , testCase "testAsyncWaitTimeoutCompletesSTM"
             (delayedAssertion
              "expected waitTimeout to return a value"
