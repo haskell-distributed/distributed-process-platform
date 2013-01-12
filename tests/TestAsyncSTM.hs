@@ -26,7 +26,7 @@ import TestUtils
 
 testAsyncPoll :: TestResult (AsyncResult ()) -> Process ()
 testAsyncPoll result = do
-    hAsync <- async $ do "go" <- expect; say "running" >> return ()
+    hAsync <- async $ asyncDo $ do "go" <- expect; say "running" >> return ()
     ar <- poll hAsync
     case ar of
       AsyncPending ->
@@ -35,7 +35,7 @@ testAsyncPoll result = do
 
 testAsyncCancel :: TestResult (AsyncResult ()) -> Process ()
 testAsyncCancel result = do
-    hAsync <- async $ runTestProcess $ say "running" >> return ()
+    hAsync <- async $ asyncDo $ runTestProcess $ say "running" >> return ()
     sleep $ milliSeconds 100
 
     p <- poll hAsync -- nasty kind of assertion: use assertEquals?
@@ -47,7 +47,7 @@ testAsyncCancelWait :: TestResult (Maybe (AsyncResult ())) -> Process ()
 testAsyncCancelWait result = do
     testPid <- getSelfPid
     p <- spawnLocal $ do
-      hAsync <- async $ runTestProcess $ sleep $ seconds 60
+      hAsync <- async $ asyncDo $ runTestProcess $ sleep $ seconds 60
       sleep $ milliSeconds 100
 
       send testPid "running"
@@ -65,7 +65,7 @@ testAsyncWaitTimeout :: TestResult (Maybe (AsyncResult ())) -> Process ()
 testAsyncWaitTimeout result =
     let delay = seconds 1
     in do
-    hAsync <- async $ sleep $ seconds 20
+    hAsync <- async $ asyncDo $ sleep $ seconds 20
     waitTimeout delay hAsync >>= stash result
     cancelWait hAsync >> return ()
 
@@ -74,7 +74,7 @@ testAsyncWaitTimeoutCompletes :: TestResult (Maybe (AsyncResult ()))
 testAsyncWaitTimeoutCompletes result =
     let delay = seconds 1
     in do
-    hAsync <- async $ sleep $ seconds 20
+    hAsync <- async $ asyncDo $ sleep $ seconds 20
     waitTimeout delay hAsync >>= stash result
     cancelWait hAsync >> return ()
 
@@ -83,7 +83,7 @@ testAsyncWaitTimeoutSTM :: TestResult (Maybe (AsyncResult ())) -> Process ()
 testAsyncWaitTimeoutSTM result =
     let delay = seconds 1
     in do
-    hAsync <- async $ sleep $ seconds 20  
+    hAsync <- async $ asyncDo $ sleep $ seconds 20  
     waitTimeoutSTM delay hAsync >>= stash result
 
 testAsyncWaitTimeoutCompletesSTM :: TestResult (Maybe (AsyncResult Int))
@@ -91,7 +91,7 @@ testAsyncWaitTimeoutCompletesSTM :: TestResult (Maybe (AsyncResult Int))
 testAsyncWaitTimeoutCompletesSTM result =
     let delay = seconds 1 in do
     
-    hAsync <- async $ do
+    hAsync <- async $ asyncDo $ do
         i <- expect
         return i
 
@@ -106,7 +106,7 @@ testAsyncLinked result = do
     mv :: MVar (AsyncSTM ()) <- liftIO $ newEmptyMVar
     pid <- spawnLocal $ do
         -- NB: async == asyncLinked for AsyncChan
-        h <- asyncLinked $ do
+        h <- asyncLinked $ asyncDo $ do
             "waiting" <- expect
             return ()
         stash mv h
@@ -134,9 +134,9 @@ testAsyncLinked result = do
 
 testAsyncWaitAny :: TestResult [AsyncResult String] -> Process ()
 testAsyncWaitAny result = do
-  p1 <- async $ expect >>= return
-  p2 <- async $ expect >>= return
-  p3 <- async $ expect >>= return
+  p1 <- async $ asyncDo $ expect >>= return
+  p2 <- async $ asyncDo $ expect >>= return
+  p3 <- async $ asyncDo $ expect >>= return
   send (_asyncWorker p3) "c"
   r1 <- waitAny [p1, p2, p3]
   
@@ -151,14 +151,14 @@ testAsyncWaitAny result = do
 
 testAsyncWaitAnyTimeout :: TestResult (Maybe (AsyncResult String)) -> Process ()
 testAsyncWaitAnyTimeout result = do
-  p1 <- asyncLinked $ expect >>= return
-  p2 <- asyncLinked $ expect >>= return
-  p3 <- asyncLinked $ expect >>= return
+  p1 <- asyncLinked $ asyncDo $ expect >>= return
+  p2 <- asyncLinked $ asyncDo $ expect >>= return
+  p3 <- asyncLinked $ asyncDo $ expect >>= return
   waitAnyTimeout (seconds 1) [p1, p2, p3] >>= stash result
 
 testAsyncCancelWith :: TestResult Bool -> Process ()
 testAsyncCancelWith result = do
-  p1 <- async $ do { s :: String <- expect; return s }
+  p1 <- async $ asyncDo $ do { s :: String <- expect; return s }
   cancelWith "foo" p1
   AsyncFailed (DiedException _) <- wait p1
   stash result True

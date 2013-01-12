@@ -16,11 +16,10 @@
 -- and waiting for their results.  It is a thin layer over the basic
 -- concurrency operations provided by "Control.Distributed.Process".
 --
--- The difference between 'Control.Distributed.Platform.Async.Async' and
+-- The difference between 'Control.Distributed.Platform.Async.AsyncSTM' and
 -- 'Control.Distributed.Platform.Async.AsyncChan' is that handles of the
--- former (i.e., returned by /this/ module) can be sent across a remote
--- boundary, where the receiver can use the API calls to wait on the
--- results of the computation at their end.
+-- former (i.e., returned by /this/ module) can be used by processes other
+-- than the caller of 'async', but are not 'Serializable'.
 --
 -- Like 'Control.Distributed.Platform.Async.AsyncChan', workers can be
 -- started on a local or remote node.
@@ -57,7 +56,7 @@ import Control.Applicative
 import Control.Concurrent.STM hiding (check)
 import Control.Distributed.Process
 import Control.Distributed.Process.Serializable
-import Control.Distributed.Process.Platform.Async
+import Control.Distributed.Process.Platform.Async hiding (asyncDo)
 import Control.Distributed.Process.Platform.Internal.Types
   ( CancelWait(..)
   , Channel
@@ -113,7 +112,9 @@ asyncLinked :: (Serializable a) => AsyncTask a -> Process (AsyncSTM a)
 asyncLinked = asyncDo True
 
 asyncDo :: (Serializable a) => Bool -> AsyncTask a -> Process (AsyncSTM a)
-asyncDo shouldLink task = do
+asyncDo shouldLink (AsyncRemoteTask d n c) =
+  let proc = call d n c in asyncDo shouldLink AsyncTask { asyncTask = proc }
+asyncDo shouldLink (AsyncTask proc) = do
     root <- getSelfPid
     result <- liftIO $ newEmptyTMVarIO
     
@@ -121,7 +122,7 @@ asyncDo shouldLink task = do
     mPid <- spawnLocal $ do
         wPid <- spawnLocal $ do
             () <- expect
-            r <- task
+            r <- proc
             void $ liftIO $ atomically $ putTMVar result (AsyncDone r)
 
         send root wPid   -- let the parent process know the worker pid
