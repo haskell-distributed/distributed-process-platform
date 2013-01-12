@@ -37,8 +37,8 @@ module Control.Distributed.Process.Platform.Async.AsyncSTM
   -- and stopping/killing
   , cancel
   , cancelWait
---  , cancelWith
---  , cancelKill
+  , cancelWith
+  , cancelKill
   -- functions to query an async-result
   , poll
   -- , check
@@ -255,6 +255,39 @@ cancel (AsyncSTM _ g _) = send g CancelWait
 --
 cancelWait :: (Serializable a) => AsyncSTM a -> Process (AsyncResult a)
 cancelWait hAsync = cancel hAsync >> wait hAsync
+
+-- | Cancel an asynchronous operation immediately.
+-- This operation is performed by sending an /exit signal/ to the asynchronous
+-- worker, which leads to the following semantics:
+--
+-- 1. if the worker already completed, this function has no effect
+-- 2. the worker might complete after this call, but before the signal arrives
+-- 3. the worker might ignore the exit signal using @catchExit@
+--
+-- In case of (3), this function has no effect. You should use 'cancel'
+-- if you need to guarantee that the asynchronous task is unable to ignore
+-- the cancellation instruction.
+--
+-- You should also consider that when sending exit signals to a process, the
+-- definition of 'immediately' is somewhat vague and a scheduler might take
+-- time to handle the request, which can lead to situations similar to (1) as
+-- listed above, if the scheduler to which the calling process' thread is bound
+-- decides to GC whilst another scheduler on which the worker is running is able
+-- to continue.
+--
+-- See 'Control.Distributed.Process.exit'
+cancelWith :: (Serializable b) => b -> AsyncSTM a -> Process ()
+cancelWith reason = (flip exit) reason . _asyncWorker
+
+-- | Like 'cancelWith' but sends a @kill@ instruction instead of an exit.
+--
+-- See 'Control.Distributed.Process.kill'
+cancelKill :: String -> AsyncSTM a -> Process ()
+cancelKill reason = (flip kill) reason . _asyncWorker
+
+--------------------------------------------------------------------------------
+-- STM Specific API                                                           --
+--------------------------------------------------------------------------------
 
 -- | STM version of 'waitAny'.
 waitAnySTM :: [AsyncSTM a] -> IO (AsyncSTM a, AsyncResult a)

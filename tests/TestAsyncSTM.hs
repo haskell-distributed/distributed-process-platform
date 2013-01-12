@@ -156,6 +156,13 @@ testAsyncWaitAnyTimeout result = do
   p3 <- asyncLinked $ expect >>= return
   waitAnyTimeout (seconds 1) [p1, p2, p3] >>= stash result
 
+testAsyncCancelWith :: TestResult Bool -> Process ()
+testAsyncCancelWith result = do
+  p1 <- async $ do { s :: String <- expect; return s }
+  cancelWith "foo" p1
+  AsyncFailed (DiedException _) <- wait p1
+  stash result True
+
 tests :: LocalNode  -> [Test]
 tests localNode = [
     testGroup "Handling async results" [
@@ -195,8 +202,12 @@ tests localNode = [
                         AsyncDone "a"] testAsyncWaitAny)
         , testCase "testAsyncWaitAnyTimeout"
             (delayedAssertion
-             "expected waitAnyTimeout to handle idle channels properly"
+             "expected waitAnyTimeout to handle pending results properly"
              localNode Nothing testAsyncWaitAnyTimeout)
+        , testCase "testAsyncCancelWith"
+            (delayedAssertion
+             "expected the worker to have been killed with the given signal"
+             localNode True testAsyncCancelWith)
       ]
   ]
 
