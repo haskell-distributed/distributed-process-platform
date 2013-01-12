@@ -27,26 +27,27 @@ import Control.Distributed.Process.Platform.Test
 import TestUtils
 
 testSendAfter :: TestResult Bool -> Process ()
-testSendAfter result =  do
-  let delay = seconds 1
+testSendAfter result =
+  let delay = seconds 1 in do
+  sleep $ seconds 10 
   pid <- getSelfPid
   _ <- sendAfter delay pid Ping
-  hdInbox <- receiveTimeout (intervalToMs delay * 4) [
-                                 match (\m@(Ping) -> return m) ]
+  hdInbox <- receiveTimeout (asTimeout (seconds 2)) [
+                        match (\m@(Ping) -> return m) ]
   case hdInbox of
       Just Ping -> stash result True
       Nothing   -> stash result False
 
 testRunAfter :: TestResult Bool -> Process ()
-testRunAfter result = do
-  let delay = seconds 2  
+testRunAfter result =
+  let delay = seconds 2 in do
 
   parentPid <- getSelfPid
   _ <- spawnLocal $ do
     _ <- runAfter delay $ send parentPid Ping
     return ()
 
-  msg <- expectTimeout (intervalToMs delay * 4)
+  msg <- expectTimeout ((asTimeout delay) * 4)
   case msg of
       Just Ping -> stash result True
       Nothing   -> stash result False
@@ -54,7 +55,7 @@ testRunAfter result = do
 
 testCancelTimer :: TestResult Bool -> Process ()
 testCancelTimer result = do
-  let delay = milliseconds 50
+  let delay = milliSeconds 50
   pid <- periodically delay noop
   ref <- monitor pid    
   
@@ -69,7 +70,7 @@ testCancelTimer result = do
 
 testPeriodicSend :: TestResult Bool -> Process ()
 testPeriodicSend result = do
-  let delay = milliseconds 100
+  let delay = milliSeconds 100
   self <- getSelfPid
   ref <- ticker delay self
   listener 0 ref
@@ -118,7 +119,7 @@ testTimerFlush result = do
   ref  <- ticker delay self
   
   -- sleep so we *should* have a message in our 'mailbox'
-  sleep $ milliseconds 1500
+  sleep $ milliSeconds 2
   
   -- flush it out if it's there
   flushTimer ref Tick (Delay $ seconds 3)
@@ -127,6 +128,11 @@ testTimerFlush result = do
   case m of
       Nothing   -> stash result True
       Just Tick -> stash result False
+
+testSleep :: TestResult Bool -> Process ()
+testSleep r = do 
+  sleep $ seconds 20
+  stash r True
 
 --------------------------------------------------------------------------------
 -- Utilities and Plumbing                                                     --
@@ -158,6 +164,10 @@ tests localNode = [
       , testCase "testTimerFlush"
                  (delayedAssertion
                   "expected all Ticks to have been flushed"
+                  localNode True testTimerFlush)
+      , testCase "testSleep"
+                 (delayedAssertion
+                  "why am I not seeing a delay!?"
                   localNode True testTimerFlush)
       ]
   ]

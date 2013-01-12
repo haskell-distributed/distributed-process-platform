@@ -49,6 +49,7 @@ module Control.Distributed.Process.Platform.Async.AsyncSTM
   -- , waitCheckTimeout
   -- STM versions
   , pollSTM
+  , waitTimeoutSTM
   ) where
 
 
@@ -62,11 +63,15 @@ import Control.Distributed.Process.Platform.Internal.Types
   , Channel
   )
 import Control.Distributed.Process.Platform.Time
+  ( asTimeout
+  , TimeInterval
+  )
 import Control.Monad
 import Data.Maybe
   ( fromMaybe
   )
 import Prelude hiding (catch)
+import System.Timeout (timeout)
 
 --------------------------------------------------------------------------------
 -- Cloud Haskell STM Async Process API                                        --
@@ -188,9 +193,21 @@ wait = liftIO . atomically . waitSTM
 waitTimeout :: (Serializable a) =>
                TimeInterval -> AsyncSTM a -> Process (Maybe (AsyncResult a))
 waitTimeout t hAsync = do
+  -- this is not the most efficient thing to do, but it's the most erlang-ish
+  -- we might be better off with something more like this though:
+  -- 
   (sp, rp) <- newChan :: (Serializable a) => Process (Channel (AsyncResult a))
   pid <- spawnLocal $ wait hAsync >>= sendChan sp
-  receiveChanTimeout (intervalToMs t) rp `finally` kill pid "timeout"
+  receiveChanTimeout (asTimeout t) rp `finally` kill pid "timeout"
+
+-- | As 'waitTimeout' but uses STM directly, which might be more efficient.
+waitTimeoutSTM :: (Serializable a)
+                 => TimeInterval
+                 -> AsyncSTM a
+                 -> Process (Maybe (AsyncResult a))
+waitTimeoutSTM t hAsync = 
+  let t' = (asTimeout t)
+  in liftIO $ timeout t' $ atomically $ waitSTM hAsync
 
 -- | Cancel an asynchronous operation. Cancellation is asynchronous in nature.
 -- To wait for cancellation to complete, use 'cancelWait' instead. The notes
@@ -207,8 +224,8 @@ cancel (AsyncSTM _ g _) = send g CancelWait
 -- example, the worker may complete its task after this function is called, but
 -- before the cancellation instruction is acted upon.
 --
--- If you wish to stop an asychronous operation /immediately/ (with caveats) then
--- consider using 'cancelWith' or 'cancelKill' instead.
+-- If you wish to stop an asychronous operation /immediately/ (with caveats)
+-- then consider using 'cancelWith' or 'cancelKill' instead.
 --
 cancelWait :: (Serializable a) => AsyncSTM a -> Process (AsyncResult a)
 cancelWait hAsync = cancel hAsync >> wait hAsync
@@ -223,4 +240,3 @@ waitSTM (AsyncSTM _ _ w) = w
 {-# INLINE pollSTM #-}
 pollSTM :: AsyncSTM a -> STM (Maybe (AsyncResult a))
 pollSTM (AsyncSTM _ _ w) = (Just <$> w) `orElse` return Nothing
-

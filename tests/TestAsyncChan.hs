@@ -36,7 +36,7 @@ testAsyncPoll result = do
 testAsyncCancel :: TestResult (AsyncResult ()) -> Process ()
 testAsyncCancel result = do
     hAsync <- async $ runTestProcess $ say "running" >> return ()
-    sleep $ milliseconds 100
+    sleep $ milliSeconds 100
 
     p <- poll hAsync -- nasty kind of assertion: use assertEquals?
     case p of
@@ -48,7 +48,7 @@ testAsyncCancelWait result = do
     testPid <- getSelfPid
     p <- spawnLocal $ do
       hAsync <- async $ runTestProcess $ say "running" >> (sleep $ seconds 60)
-      sleep $ milliseconds 100
+      sleep $ milliSeconds 100
 
       send testPid "running"
 
@@ -56,7 +56,7 @@ testAsyncCancelWait result = do
       cancelWait hAsync >>= send testPid
 
     "running" <- expect
-    d <- expectTimeout (intervalToMs $ seconds 5)
+    d <- expectTimeout (asTimeout $ seconds 5)
     case d of
         Nothing -> kill p "timed out" >> stash result Nothing
         Just ar -> stash result (Just ar)

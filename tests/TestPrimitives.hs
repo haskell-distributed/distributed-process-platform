@@ -74,7 +74,7 @@ testLinkingWithAbnormalExits result = do
 
   ref <- monitor pid
   kill workerPid "finish"  -- note the use of 'kill' instead of send
-  r <- receiveTimeout (intervalToMs $ seconds 20) [
+  r <- receiveTimeout (asTimeout $ seconds 20) [
       matchIf (\(ProcessMonitorNotification ref' _ _) -> ref == ref')
               (\(ProcessMonitorNotification _ _ reason) -> return reason)
     ]

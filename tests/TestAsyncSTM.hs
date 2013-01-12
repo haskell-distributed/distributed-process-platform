@@ -34,7 +34,7 @@ testAsyncPoll result = do
 testAsyncCancel :: TestResult (AsyncResult ()) -> Process ()
 testAsyncCancel result = do
     hAsync <- async $ runTestProcess $ say "running" >> return ()
-    sleep $ milliseconds 100
+    sleep $ milliSeconds 100
 
     p <- poll hAsync -- nasty kind of assertion: use assertEquals?
     case p of
@@ -46,7 +46,7 @@ testAsyncCancelWait result = do
     testPid <- getSelfPid
     p <- spawnLocal $ do
       hAsync <- async $ runTestProcess $ say "running" >> (sleep $ seconds 60)
-      sleep $ milliseconds 100
+      sleep $ milliSeconds 100
 
       send testPid "running"
 
@@ -54,7 +54,7 @@ testAsyncCancelWait result = do
       cancelWait hAsync >>= send testPid
       
     "running" <- expect
-    d <- expectTimeout (intervalToMs $ seconds 5)
+    d <- expectTimeout (asTimeout $ seconds 5)
     case d of
         Nothing -> kill p "timed out" >> stash result Nothing
         Just ar -> stash result (Just ar)
@@ -66,6 +66,40 @@ testAsyncWaitTimeout result =
     hAsync <- async $ sleep $ seconds 20
     waitTimeout delay hAsync >>= stash result
     cancelWait hAsync >> return ()
+
+testAsyncWaitTimeoutCompletes :: TestResult (Maybe (AsyncResult ()))
+                              -> Process ()
+testAsyncWaitTimeoutCompletes result =
+    let delay = seconds 1
+    in do
+    hAsync <- async $ sleep $ seconds 20
+    waitTimeout delay hAsync >>= stash result
+    cancelWait hAsync >> return ()
+
+
+testAsyncWaitTimeoutSTM :: TestResult (Maybe (AsyncResult ())) -> Process ()
+testAsyncWaitTimeoutSTM result =
+    let delay = seconds 1
+    in do
+    hAsync <- async $ sleep $ seconds 20  
+    r <- waitTimeoutSTM delay hAsync
+    liftIO $ putStrLn $ "result: " ++ (show r)
+    stash result r
+
+testAsyncWaitTimeoutCompletesSTM :: TestResult (Maybe (AsyncResult Int))
+                                 -> Process ()
+testAsyncWaitTimeoutCompletesSTM result =
+    let delay = seconds 1 in do
+    
+    hAsync <- async $ do
+        i <- expect
+        return i
+
+    r <- waitTimeoutSTM delay hAsync    
+    case r of
+        Nothing -> send (_asyncWorker hAsync) (10 :: Int)
+                    >> wait hAsync >>= stash result . Just
+        Just _  -> cancelWait hAsync >> stash result Nothing
 
 tests :: LocalNode  -> [Test]
 tests localNode = [
@@ -86,6 +120,14 @@ tests localNode = [
             (delayedAssertion
              "expected waitTimeout to return Nothing when it times out"
              localNode (Nothing) testAsyncWaitTimeout)
+        , testCase "testAsyncWaitTimeoutSTM"
+            (delayedAssertion
+             "expected waitTimeoutSTM to return Nothing when it times out"
+             localNode (Nothing) testAsyncWaitTimeoutCompletesSTM)
+        , testCase "testAsyncWaitTimeoutCompletesSTM"
+            (delayedAssertion
+             "expected waitTimeout to return a value"
+             localNode (Just (AsyncDone 10)) testAsyncWaitTimeoutCompletesSTM)
       ]
   ]
 
