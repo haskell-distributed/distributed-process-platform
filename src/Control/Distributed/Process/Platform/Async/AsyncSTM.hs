@@ -41,12 +41,12 @@ module Control.Distributed.Process.Platform.Async.AsyncSTM
   , cancelKill
   -- functions to query an async-result
   , poll
-  -- , check
+  , check
   , wait
   , waitAny
   , waitAnyTimeout
   , waitTimeout
-  -- , waitCheckTimeout
+  , waitCheckTimeout
   -- STM versions
   , pollSTM
   , waitTimeoutSTM
@@ -54,7 +54,7 @@ module Control.Distributed.Process.Platform.Async.AsyncSTM
 
 
 import Control.Applicative
-import Control.Concurrent.STM
+import Control.Concurrent.STM hiding (check)
 import Control.Distributed.Process
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Async
@@ -174,6 +174,21 @@ poll :: (Serializable a) => AsyncSTM a -> Process (AsyncResult a)
 poll hAsync = do
   r <- liftIO $ atomically $ pollSTM hAsync
   return $ fromMaybe (AsyncPending) r
+
+-- | Like 'poll' but returns 'Nothing' if @(poll hAsync) == AsyncPending@.
+-- See 'poll'.
+check :: (Serializable a) => AsyncSTM a -> Process (Maybe (AsyncResult a))
+check hAsync = poll hAsync >>= \r -> case r of
+  AsyncPending -> return Nothing
+  ar           -> return (Just ar)
+
+-- | Wait for an asynchronous operation to complete or timeout. This variant
+-- returns the 'AsyncResult' itself, which will be 'AsyncPending' if the
+-- result has not been made available, otherwise one of the other constructors.
+waitCheckTimeout :: (Serializable a) =>
+                    TimeInterval -> AsyncSTM a -> Process (AsyncResult a)
+waitCheckTimeout t hAsync =
+  waitTimeout t hAsync >>= return . fromMaybe (AsyncPending)
 
 -- | Wait for an asynchronous action to complete, and return its
 -- value. The result (which can include failure and/or cancellation) is
