@@ -4,6 +4,7 @@
 
 module TestAsyncSTM where
 
+import Control.Concurrent.MVar
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
@@ -21,6 +22,7 @@ import Prelude hiding (catch)
 import Test.Framework (Test, testGroup)
 import Test.Framework.Providers.HUnit (testCase)
 import TestUtils
+
 
 testAsyncPoll :: TestResult (AsyncResult ()) -> Process ()
 testAsyncPoll result = do
@@ -99,6 +101,37 @@ testAsyncWaitTimeoutCompletesSTM result =
                     >> wait hAsync >>= stash result . Just
         Just _  -> cancelWait hAsync >> stash result Nothing
 
+testAsyncLinked :: TestResult Bool -> Process ()
+testAsyncLinked result = do
+    mv :: MVar (AsyncSTM ()) <- liftIO $ newEmptyMVar
+    pid <- spawnLocal $ do
+        -- NB: async == asyncLinked for AsyncChan
+        h <- asyncLinked $ do
+            "waiting" <- expect
+            return ()
+        stash mv h
+        "sleeping" <- expect
+        return ()
+
+    hAsync <- liftIO $ takeMVar mv
+
+    mref <- monitor $ _asyncWorker hAsync
+    exit pid "stop"
+
+    _ <- receiveTimeout (after 5 Seconds) [
+              matchIf (\(ProcessMonitorNotification mref' _ _) -> mref == mref')
+                      (\_ -> return ())
+            ]
+
+    -- since the initial caller died and we used 'asyncLinked', the async should
+    -- pick up on the exit signal and set the result accordingly. trying to match
+    -- on 'DiedException String' is pointless though, as the *string* is highly
+    -- context dependent.
+    r <- waitTimeoutSTM (within 3 Seconds) hAsync
+    case r of
+        Nothing -> stash result True
+        Just _  -> stash result False
+
 tests :: LocalNode  -> [Test]
 tests localNode = [
     testGroup "Handling async results" [
@@ -126,6 +159,10 @@ tests localNode = [
             (delayedAssertion
              "expected waitTimeout to return a value"
              localNode (Just (AsyncDone 10)) testAsyncWaitTimeoutCompletesSTM)
+        , testCase "testAsyncLinked"
+            (delayedAssertion
+             "expected linked process to die with originator"
+             localNode True testAsyncLinked)
       ]
   ]
 
