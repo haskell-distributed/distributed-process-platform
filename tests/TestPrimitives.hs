@@ -119,7 +119,7 @@ multicallTest transport =
           mystr = "hello"
           mention :: a -> b -> b
           mention _a b = b
-          
+
 
 
 --------------------------------------------------------------------------------

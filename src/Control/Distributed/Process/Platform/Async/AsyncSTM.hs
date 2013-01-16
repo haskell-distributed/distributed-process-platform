@@ -4,7 +4,7 @@
 
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Control.Distributed.Platform.Async.AsyncSTM
+-- Module      :  Control.Distributed.Process.Platform.Async.AsyncSTM
 -- Copyright   :  (c) Tim Watson 2012
 -- License     :  BSD3 (see the file LICENSE)
 --
@@ -117,7 +117,7 @@ asyncDo shouldLink (AsyncRemoteTask d n c) =
 asyncDo shouldLink (AsyncTask proc) = do
     root <- getSelfPid
     result <- liftIO $ newEmptyTMVarIO
-    
+
     -- listener/response proxy
     mPid <- spawnLocal $ do
         wPid <- spawnLocal $ do
@@ -211,7 +211,7 @@ waitTimeout :: (Serializable a) =>
 waitTimeout t hAsync = do
   -- this is not the most efficient thing to do, but it's the most erlang-ish
   -- we might be better off with something more like this though:
-  -- 
+  --
   (sp, rp) <- newChan :: (Serializable a) => Process (Channel (AsyncResult a))
   pid <- spawnLocal $ wait hAsync >>= sendChan sp
   receiveChanTimeout (asTimeout t) rp `finally` kill pid "timeout"
@@ -221,7 +221,7 @@ waitTimeoutSTM :: (Serializable a)
                  => TimeInterval
                  -> AsyncSTM a
                  -> Process (Maybe (AsyncResult a))
-waitTimeoutSTM t hAsync = 
+waitTimeoutSTM t hAsync =
   let t' = (asTimeout t)
   in liftIO $ timeout t' $ atomically $ waitSTM hAsync
 
@@ -232,7 +232,7 @@ waitTimeoutSTM t hAsync =
 -- NB: Unlike @AsyncChan@, 'AsyncSTM' does not discard its 'AsyncResult' once
 -- read, therefore the semantics of this function are different to the
 -- former.
--- 
+--
 waitAny :: (Serializable a)
         => [AsyncSTM a]
         -> Process (AsyncResult a)
@@ -247,7 +247,7 @@ waitAnyTimeout :: (Serializable a)
                -> Process (Maybe (AsyncResult a))
 waitAnyTimeout delay asyncs =
   let t' = asTimeout delay
-  in liftIO $ timeout t' $ do 
+  in liftIO $ timeout t' $ do
     r <- waitAnySTM asyncs
     return $ snd r
 
