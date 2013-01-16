@@ -54,7 +54,7 @@ testAsyncCancelWait result = do
 
       AsyncPending <- poll hAsync
       cancelWait hAsync >>= send testPid
-      
+
     "running" <- expect
     d <- expectTimeout (asTimeout $ seconds 5)
     case d of
@@ -83,19 +83,19 @@ testAsyncWaitTimeoutSTM :: TestResult (Maybe (AsyncResult ())) -> Process ()
 testAsyncWaitTimeoutSTM result =
     let delay = seconds 1
     in do
-    hAsync <- async $ asyncDo $ sleep $ seconds 20  
+    hAsync <- async $ asyncDo $ sleep $ seconds 20
     waitTimeoutSTM delay hAsync >>= stash result
 
 testAsyncWaitTimeoutCompletesSTM :: TestResult (Maybe (AsyncResult Int))
                                  -> Process ()
 testAsyncWaitTimeoutCompletesSTM result =
     let delay = seconds 1 in do
-    
+
     hAsync <- async $ asyncDo $ do
         i <- expect
         return i
 
-    r <- waitTimeoutSTM delay hAsync    
+    r <- waitTimeoutSTM delay hAsync
     case r of
         Nothing -> send (_asyncWorker hAsync) (10 :: Int)
                     >> wait hAsync >>= stash result . Just
@@ -139,14 +139,14 @@ testAsyncWaitAny result = do
   p3 <- async $ asyncDo $ expect >>= return
   send (_asyncWorker p3) "c"
   r1 <- waitAny [p1, p2, p3]
-  
+
   send (_asyncWorker p1) "a"
   send (_asyncWorker p2) "b"
   sleep $ seconds 1
-  
+
   r2 <- waitAny [p2, p3]
   r3 <- waitAny [p1, p2, p3]
-  
+
   stash result $ [r1, r2, r3]
 
 testAsyncWaitAnyTimeout :: TestResult (Maybe (AsyncResult String)) -> Process ()
