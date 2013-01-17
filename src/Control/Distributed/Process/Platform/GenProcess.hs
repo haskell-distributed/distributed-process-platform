@@ -2,6 +2,7 @@
 {-# LANGUAGE ExistentialQuantification  #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TemplateHaskell            #-}
+{-# LANGUAGE RankNTypes                 #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -22,7 +23,10 @@
 --
 -- [API Overview]
 --
--- 
+-- A generic process is defined in terms of its state, the domain of input
+-- and output message types it supports and the steps taken in response
+-- to receipt of messages.
+--
 -----------------------------------------------------------------------------
 
 module Control.Distributed.Process.Platform.GenProcess
@@ -70,21 +74,28 @@ module Control.Distributed.Process.Platform.GenProcess
   , timeoutAfter_
   , hibernate_
   , stop_
+    -- upgrading (!)
+  , ProcessUpgradeTransfer(..)
+  , upgrade
+  , become
     -- lower level handlers
   , handleDispatch
   ) where
 
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (threadDelay, myThreadId, throwTo, forkIO)
+import Control.Exception (Exception)
 import Control.Distributed.Process hiding (call)
+import Control.Distributed.Process.Closure()
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process.Platform.Async
 import Control.Distributed.Process.Platform.Async.AsyncSTM
 
 import Data.Binary
+import Control.Distributed.Process.Internal.Closure.TH
 import Data.DeriveTH
 import Data.Typeable (Typeable, typeOf)
-import Prelude hiding (init)
+import Prelude hiding (init, catch)
 
 data ServerId = ServerId ProcessId | ServerName String
 
@@ -118,11 +129,23 @@ data InitResult s =
     InitOk s Delay
   | forall r. (Serializable r) => InitFail r
 
+data ProcessUpgradeTransfer s = ProcessUpgradeTransfer s
+  deriving (Typeable)
+
+instance Show (ProcessUpgradeTransfer s) where
+  show _ = "ProcessUpgradeTransfer"
+
+instance forall s. (Typeable s) => Exception (ProcessUpgradeTransfer s)
+
+type ProcessUpgradeSpec s =
+    Closure (ProcessUpgradeTransfer s -> Process TerminateReason)
+
 data ProcessAction s =
     ProcessContinue  s
   | ProcessTimeout   TimeInterval s
   | ProcessHibernate TimeInterval s
   | ProcessStop      TerminateReason
+  | ProcessUpgrade   (ProcessUpgradeSpec s)
 
 data ProcessReply s a =
     ProcessReply a (ProcessAction s)
@@ -165,6 +188,8 @@ data UnhandledMessagePolicy =
     Terminate  -- ^ stop immediately, giving @TerminateOther "UNHANDLED_INPUT"@ as the reason
   | DeadLetter ProcessId -- ^ forward the message to the given recipient
   | Drop                 -- ^ dequeue and then drop/ignore the message
+  deriving (Typeable)
+$(derive makeBinary ''UnhandledMessagePolicy)
 
 -- | Stores the functions that determine runtime behaviour in response to
 -- incoming messages and a policy for responding to unhandled messages. 
@@ -176,10 +201,11 @@ data ProcessDefinition s = ProcessDefinition {
   , timeoutHandler
     :: TimeoutHandler s   -- ^ a function that handles timeouts    
   , terminateHandler
-    :: TerminateHandler s -- ^ a function that is run just before the process exits
+    :: TerminateHandler s -- ^ a function that is run just before we exit
   , unhandledMessagePolicy
     :: UnhandledMessagePolicy -- ^ how to deal with unhandled messages
   }
+  deriving (Typeable)
 
 --------------------------------------------------------------------------------
 -- Cloud Haskell Generic Process API                                          --
@@ -192,7 +218,8 @@ data ProcessDefinition s = ProcessDefinition {
 -- 'Process' until completion and return @Right TerminateReason@ *or*,
 -- if initialisation fails, return @Left InitResult@ which will be
 -- @InitFail why@.
-start :: a
+start :: forall a s. (Typeable s)
+      => a
       -> InitHandler a s
       -> ProcessDefinition s
       -> Process (Either (InitResult s) TerminateReason)
@@ -297,6 +324,15 @@ callAsync sid msg = do
 cast :: forall a . (Serializable a)
                  => ProcessId -> a -> Process ()
 cast sid msg = send sid (CastMessage msg)
+
+upgrade :: forall a. (Typeable a)
+        => ProcessId -> ProcessUpgradeSpec a -> Process ()
+upgrade sid spec = send sid spec
+
+become :: ProcessDefinition s
+       -> ProcessUpgradeTransfer s
+       -> Process TerminateReason
+become spec (ProcessUpgradeTransfer s) = initLoop spec s Infinity
 
 -- Constructing Handlers from *ordinary* functions
 
@@ -560,13 +596,22 @@ applyPolicy s p m =
     DeadLetter pid -> forward m pid >> continue s
     Drop           -> continue s
 
+data SIGUP s = forall s. (Typeable s) => SIGUP s
+  deriving (Typeable)
+
+instance forall s. (Typeable s) => Exception (SIGUP s)
+instance Show (SIGUP s) where
+  show _ = "Opaque(upgrade signal)"
+
 initLoop :: ProcessDefinition s -> s -> Delay -> Process TerminateReason
 initLoop b s w =
   let p   = unhandledMessagePolicy b
       t   = timeoutHandler b
       ms  = map (matchMessage p s) (dispatchers b)
       ms' = ms ++ addInfoAux p s (infoHandlers b)
-  in loop ms' t s w
+  in do
+    catch (loop ms' t s w) 
+          (\(SIGUP s') -> performUpgrade s (ProcessUpgrade s'))
   where
     addInfoAux :: UnhandledMessagePolicy
                -> s
@@ -595,6 +640,11 @@ initLoop b s w =
               Nothing -> applyPolicy st pol msg
               Just act -> return act
 
+    upgradeHandler :: forall a. (Typeable a)
+                   => ProcessUpgradeSpec a
+                   -> Process (ProcessAction a)
+    upgradeHandler = return . ProcessUpgrade  
+
 loop :: [Match (ProcessAction s)]
      -> TimeoutHandler s
      -> s
@@ -606,7 +656,7 @@ loop ms h s t = do
       (ProcessContinue s')     -> loop ms h s' t
       (ProcessTimeout t' s')   -> loop ms h s' (Delay t')
       (ProcessHibernate d' s') -> block d' >> loop ms h s' t
-      (ProcessStop r)          -> return (r :: TerminateReason)
+      (ProcessStop r)          -> return $ (r :: TerminateReason)
   where block :: TimeInterval -> Process ()
         block i = liftIO $ threadDelay (asTimeout i)
 
@@ -631,8 +681,41 @@ processReceive ms h s t = do
 
 -- internal/utility
 
+-- | This is a highly unstructured hack to make upgrades work. We should
+-- *really* think more carefully about how to do this, but for now I just want
+-- to see how it might work....
+--
+performUpgrade :: forall s. (Typeable s)
+               => s
+               -> ProcessUpgradeSpec s
+               -> Process TerminateReason
+performUpgrade s spec = do
+  tid <- liftIO $ myThreadId
+  proc <- unClosure spec
+  mask $ \restore -> do
+    _ <- liftIO $ forkIO $ do
+        throwTo tid ((ProcessUpgradeTransfer s) :: ProcessUpgradeTransfer s)
+        return ()
+    (restore (upgradeTo proc))
+
+upgradeTo :: forall s. (Typeable s)
+             => (ProcessUpgradeTransfer s -> Process TerminateReason)
+             -> Process TerminateReason
+upgradeTo handler = do
+    blockingWait `catch` \ex@(ProcessUpgradeTransfer _) -> handler ex
+  where blockingWait :: Process TerminateReason
+        blockingWait = do
+            BlockExpect <- expect
+            return (TerminateOther "UPGRADE_FAILED")
+
+data BlockExpect = BlockExpect
+  deriving (Typeable, Eq)
+
+instance Binary BlockExpect where
+  put BlockExpect = return ()
+  get             = return BlockExpect
+
 sendTo :: (Serializable m) => Recipient -> m -> Process ()
 sendTo (SendToPid p) m             = send p m
 sendTo (SendToService s) m         = nsend s m
 sendTo (SendToRemoteService s n) m = nsendRemote n s m
-

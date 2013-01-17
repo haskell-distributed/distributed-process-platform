@@ -10,14 +10,14 @@ import Control.Distributed.Process hiding (call)
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
 import Control.Distributed.Process.Platform.Async
-import Control.Distributed.Process.Platform.Async.AsyncChan
+import Control.Distributed.Process.Platform.Async.AsyncSTM
 import Control.Distributed.Process.Platform.GenProcess
 import Control.Distributed.Process.Platform.Test
 import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process.Platform.Timer
 
 import Data.Binary()
-import Data.Typeable()
+import Data.Typeable (Typeable)
 import MathsDemo
 
 import Test.Framework (Test, testGroup)
@@ -115,6 +115,20 @@ testKillMidCall result = do
         unpack res sid AsyncCancelled = kill sid "stop" >> stash res True
         unpack res sid _              = kill sid "stop" >> stash res False 
 
+testLocalUpgrades :: TestResult Bool -> Process()
+testLocalUpgrades result = do
+  (pid, _) <- server
+  "echo" <- call pid "echo"
+  
+  return ()
+
+upgradeEchoServer :: ProcessDefinition s
+                  -> ProcessUpgradeTransfer s
+                  -> Process TerminateReason
+upgradeEchoServer def = become def
+
+
+
 -- MathDemo test
 
 testDivByZero :: ProcessId -> TestResult (Either DivByZero Double) -> Process ()
@@ -139,30 +153,31 @@ server = mkServer Terminate
 
 mkServer :: UnhandledMessagePolicy
          -> Process (ProcessId, MVar (Either (InitResult ()) TerminateReason))
-mkServer policy =
-  let s = statelessProcess {
-        dispatchers = [
-              -- note: state is passed here, as a 'stateless' process is
-              -- in fact process definition whose state is ()
-              handleCall    (\s' (m :: String) -> reply m s')
-            , handleCall_   (\(n :: Int) -> return (n * 2))    -- "stateless"
+mkServer policy = do
+    exitReason <- liftIO $ newEmptyMVar
+    pid <- spawnLocal $ do
+      start () (statelessInit Infinity) (mkProcessDef policy) >>= stash exitReason
+    return (pid, exitReason)
 
-            , handleCast    (\s' ("ping", pid :: ProcessId) ->
-                                 send pid "pong" >> continue s')
-            , handleCastIf_ (\(c :: String, _ :: Delay) -> c == "timeout")
-                            (\("timeout", Delay d) -> timeoutAfter_ d)
+mkProcessDef :: UnhandledMessagePolicy -> ProcessDefinition ()
+mkProcessDef policy = statelessProcess {
+      dispatchers = [
+          -- note: state is passed here, as a 'stateless' process is
+          -- in fact process definition whose state is ()
+          handleCall    (\s' (m :: String) -> reply m s')
+        , handleCall_   (\(n :: Int) -> return (n * 2))    -- "stateless"
 
-            , action        (\("stop") -> stop_ TerminateNormal)
-            , action        (\("hibernate", d :: TimeInterval) -> hibernate_ d)
-          ]
+        , handleCast    (\s' ("ping", pid :: ProcessId) ->
+                             send pid "pong" >> continue s')
+        , handleCastIf_ (\(c :: String, _ :: Delay) -> c == "timeout")
+                        (\("timeout", Delay d) -> timeoutAfter_ d)
+
+        , action        (\("stop") -> stop_ TerminateNormal)
+        , action        (\("hibernate", d :: TimeInterval) -> hibernate_ d)
+        ]
       , unhandledMessagePolicy = policy
       , timeoutHandler         = \_ _ -> stop $ TerminateOther "timeout"
     }
-  in do
-    exitReason <- liftIO $ newEmptyMVar
-    pid <- spawnLocal $ do
-      start () (statelessInit Infinity) s >>= stash exitReason
-    return (pid, exitReason)
 
 tests :: NT.Transport  -> IO [Test]
 tests transport = do
