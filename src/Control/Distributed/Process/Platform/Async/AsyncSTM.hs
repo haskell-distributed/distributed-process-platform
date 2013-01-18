@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable        #-}
 {-# LANGUAGE TemplateHaskell           #-}
 {-# LANGUAGE StandaloneDeriving        #-}
+{-# LANGUAGE TypeFamilies              #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -28,9 +29,12 @@
 module Control.Distributed.Process.Platform.Async.AsyncSTM
   ( -- types/data
     AsyncRef
-  , AsyncTask
+  , AsyncTask(..)
+  , AsyncResult(..)
+  , Async(asyncWorker)
   , AsyncSTM(_asyncWorker)
   -- functions for starting/spawning
+  , newAsync
   , async
   , asyncLinked
   -- and stopping/killing
@@ -55,7 +59,7 @@ import Control.Applicative
 import Control.Concurrent.STM hiding (check)
 import Control.Distributed.Process
 import Control.Distributed.Process.Serializable
-import Control.Distributed.Process.Platform.Async hiding (asyncDo)
+import Control.Distributed.Process.Platform.Async.Types
 import Control.Distributed.Process.Platform.Internal.Types
   ( CancelWait(..)
   , Channel
@@ -90,6 +94,24 @@ data AsyncSTM a = AsyncSTM {
 
 instance Eq (AsyncSTM a) where
   AsyncSTM a b _ == AsyncSTM c d _  =  a == c && b == d
+
+newAsync :: (Serializable a)
+         => (AsyncTask a -> Process (AsyncSTM a))
+         -> AsyncTask a -> Process (Async a)
+newAsync new t = do
+  hAsync <- new t
+  return Async {
+      h_poll = poll hAsync
+    , h_check = check hAsync
+    , h_wait = wait hAsync
+    , h_waitCheckTimeout = (flip waitCheckTimeout) hAsync
+    , h_waitTimeout = (flip waitTimeout) hAsync
+    , h_cancel = cancel hAsync
+    , h_cancelWait = cancelWait hAsync
+    , h_cancelWith = (flip cancelWith) hAsync
+    , h_cancelKill = (flip cancelKill) hAsync
+    , asyncWorker = _asyncWorker hAsync
+    }
 
 -- | Spawns an asynchronous action in a new process.
 --

@@ -9,6 +9,9 @@ import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
 import Control.Distributed.Process.Platform.Async
+  ( AsyncResult(..)
+  , asyncDo
+  )
 import Control.Distributed.Process.Platform.Async.AsyncSTM
 import Control.Distributed.Process.Platform.Test
 import Control.Distributed.Process.Platform.Time
@@ -22,7 +25,6 @@ import Prelude hiding (catch)
 import Test.Framework (Test, testGroup)
 import Test.Framework.Providers.HUnit (testCase)
 import TestUtils
-
 
 testAsyncPoll :: TestResult (AsyncResult ()) -> Process ()
 testAsyncPoll result = do
@@ -77,7 +79,6 @@ testAsyncWaitTimeoutCompletes result =
     hAsync <- async $ asyncDo $ sleep $ seconds 20
     waitTimeout delay hAsync >>= stash result
     cancelWait hAsync >> return ()
-
 
 testAsyncWaitTimeoutSTM :: TestResult (Maybe (AsyncResult ())) -> Process ()
 testAsyncWaitTimeoutSTM result =
@@ -165,7 +166,7 @@ testAsyncCancelWith result = do
 
 tests :: LocalNode  -> [Test]
 tests localNode = [
-    testGroup "Handling async results" [
+    testGroup "Handling async results with STM" [
           testCase "testAsyncCancel"
             (delayedAssertion
              "expected async task to have been cancelled"
@@ -186,6 +187,10 @@ tests localNode = [
             (delayedAssertion
              "expected waitTimeoutSTM to return Nothing when it times out"
              localNode (Nothing) testAsyncWaitTimeoutSTM)
+        , testCase "testAsyncWaitTimeoutCompletes"
+            (delayedAssertion
+             "expected waitTimeout to return a value"
+             localNode Nothing testAsyncWaitTimeoutCompletes)
         , testCase "testAsyncWaitTimeoutCompletesSTM"
             (delayedAssertion
              "expected waitTimeout to return a value"
