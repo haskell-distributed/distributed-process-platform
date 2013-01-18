@@ -51,7 +51,6 @@ module Control.Distributed.Process.Platform.Async.AsyncSTM
   , waitTimeoutSTM
   ) where
 
-
 import Control.Applicative
 import Control.Concurrent.STM hiding (check)
 import Control.Distributed.Process
