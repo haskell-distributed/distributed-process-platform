@@ -21,7 +21,7 @@
 -- former (i.e., returned by /this/ module) can be used by processes other
 -- than the caller of 'async', but are not 'Serializable'.
 --
--- Like 'Control.Distributed.Platform.Async.AsyncChan', workers can be
+-- As with 'Control.Distributed.Platform.Async.AsyncChan', workers can be
 -- started on a local or remote node.
 -----------------------------------------------------------------------------
 
