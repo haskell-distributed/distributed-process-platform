@@ -15,22 +15,18 @@ module Control.Distributed.Process.Platform.Async.Types
 
 import Control.Distributed.Process
 import Control.Distributed.Process.Platform.Time
-import Control.Distributed.Process.Serializable (Serializable, SerializableDict)
+import Control.Distributed.Process.Serializable (SerializableDict)
 import Data.Binary
 import Data.DeriveTH
 import Data.Typeable (Typeable)
 
+-- | An opaque handle that refers to an asynchronous operation.
 data Async a = Async {
-    h_poll :: Process (AsyncResult a)
-  , h_check :: Process (Maybe (AsyncResult a))
-  , h_wait :: Process (AsyncResult a)
-  , h_waitCheckTimeout :: TimeInterval -> Process (AsyncResult a)
-  , h_waitTimeout :: TimeInterval -> Process (Maybe (AsyncResult a))
-  , h_cancel :: Process ()
-  , h_cancelWait :: Process (AsyncResult a)
-  , h_cancelWith :: (Serializable b) => b -> Process ()
-  , h_cancelKill :: String -> Process ()
-  , asyncWorker :: ProcessId
+    hPoll             :: Process (AsyncResult a)
+  , hWait             :: Process (AsyncResult a)
+  , hWaitTimeout      :: TimeInterval -> Process (Maybe (AsyncResult a))
+  , hCancel           :: Process ()
+  , asyncWorker       :: ProcessId
   }
 
 -- | A reference to an asynchronous action
@@ -63,3 +59,4 @@ $(derive makeBinary ''AsyncResult)
 
 deriving instance Eq a => Eq (AsyncResult a)
 deriving instance Show a => Show (AsyncResult a)
+

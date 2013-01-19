@@ -33,14 +33,13 @@ module Control.Distributed.Process.Platform.Async.AsyncSTM
   ( -- * Exported types
     AsyncRef
   , AsyncTask(..)
+  , AsyncSTM(_asyncWorker)
   , AsyncResult(..)
   , Async(asyncWorker)
-  , AsyncSTM(_asyncWorker)
-  -- functions for starting/spawning
-  , newAsync
     -- * Spawning asynchronous operations
   , async
   , asyncLinked
+  , newAsync
     -- * Cancelling asynchronous operations
   , cancel
   , cancelWait
@@ -109,15 +108,10 @@ newAsync :: (Serializable a)
 newAsync new t = do
   hAsync <- new t
   return Async {
-      h_poll = poll hAsync
-    , h_check = check hAsync
-    , h_wait = wait hAsync
-    , h_waitCheckTimeout = (flip waitCheckTimeout) hAsync
-    , h_waitTimeout = (flip waitTimeout) hAsync
-    , h_cancel = cancel hAsync
-    , h_cancelWait = cancelWait hAsync
-    , h_cancelWith = (flip cancelWith) hAsync
-    , h_cancelKill = (flip cancelKill) hAsync
+      hPoll = poll hAsync
+    , hWait = wait hAsync
+    , hWaitTimeout = (flip waitTimeout) hAsync
+    , hCancel = cancel hAsync
     , asyncWorker = _asyncWorker hAsync
     }
 
@@ -318,3 +312,4 @@ waitSTM (AsyncSTM _ _ w) = w
 {-# INLINE pollSTM #-}
 pollSTM :: AsyncSTM a -> STM (Maybe (AsyncResult a))
 pollSTM (AsyncSTM _ _ w) = (Just <$> w) `orElse` return Nothing
+
