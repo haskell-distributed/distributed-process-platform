@@ -229,9 +229,7 @@ wait = liftIO . atomically . waitSTM
 waitTimeout :: (Serializable a) =>
                TimeInterval -> AsyncSTM a -> Process (Maybe (AsyncResult a))
 waitTimeout t hAsync = do
-  -- this is not the most efficient thing to do, but it's the most erlang-ish
-  -- we might be better off with something more like this though:
-  --
+  -- This is not the most efficient thing to do, but it's the most erlang-ish.
   (sp, rp) <- newChan :: (Serializable a) => Process (Channel (AsyncResult a))
   pid <- spawnLocal $ wait hAsync >>= sendChan sp
   receiveChanTimeout (asTimeout t) rp `finally` kill pid "timeout"
