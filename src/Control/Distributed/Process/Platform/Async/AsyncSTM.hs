@@ -6,7 +6,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Control.Distributed.Process.Platform.Async.AsyncSTM
--- Copyright   :  (c) Tim Watson 2012
+-- Copyright   :  (c) Tim Watson 2012, (c) Simon Marlow 2012
 -- License     :  BSD3 (see the file LICENSE)
 --
 -- Maintainer  :  Tim Watson <watson.timothy@gmail.com>
@@ -24,10 +24,13 @@
 --
 -- As with 'Control.Distributed.Platform.Async.AsyncChan', workers can be
 -- started on a local or remote node.
+--
+-- Portions of this file are derived from the @Control.Concurrent.Async@
+-- module, written by Simon Marlow.
 -----------------------------------------------------------------------------
 
 module Control.Distributed.Process.Platform.Async.AsyncSTM
-  ( -- types/data
+  ( -- * Exported types
     AsyncRef
   , AsyncTask(..)
   , AsyncResult(..)
@@ -35,22 +38,24 @@ module Control.Distributed.Process.Platform.Async.AsyncSTM
   , AsyncSTM(_asyncWorker)
   -- functions for starting/spawning
   , newAsync
+    -- * Spawning asynchronous operations
   , async
   , asyncLinked
-  -- and stopping/killing
+    -- * Cancelling asynchronous operations
   , cancel
   , cancelWait
   , cancelWith
   , cancelKill
-  -- functions to query an async-result
+    -- * Querying for results
   , poll
   , check
   , wait
   , waitAny
+    -- * Waiting with timeouts
   , waitAnyTimeout
   , waitTimeout
   , waitCheckTimeout
-  -- STM versions
+    -- * STM versions
   , pollSTM
   , waitTimeoutSTM
   ) where
@@ -95,6 +100,9 @@ data AsyncSTM a = AsyncSTM {
 instance Eq (AsyncSTM a) where
   AsyncSTM a b _ == AsyncSTM c d _  =  a == c && b == d
 
+-- | Create a new 'AsyncSTM' and wrap it in an 'Async' record.
+--
+-- Used by 'Control.Distributed.Process.Platform.Async'.
 newAsync :: (Serializable a)
          => (AsyncTask a -> Process (AsyncSTM a))
          -> AsyncTask a -> Process (Async a)
@@ -115,11 +123,6 @@ newAsync new t = do
 
 -- | Spawns an asynchronous action in a new process.
 --
--- There is currently a contract for async workers which is that they should
--- exit normally (i.e., they should not call the @exit selfPid reason@ nor
--- @terminate@ primitives), otherwise the 'AsyncResult' will end up being
--- @AsyncFailed DiedException@ instead of containing the result.
---
 async :: (Serializable a) => AsyncTask a -> Process (AsyncSTM a)
 async = asyncDo False
 
@@ -132,6 +135,7 @@ async = asyncDo False
 asyncLinked :: (Serializable a) => AsyncTask a -> Process (AsyncSTM a)
 asyncLinked = asyncDo True
 
+-- private API
 asyncDo :: (Serializable a) => Bool -> AsyncTask a -> Process (AsyncSTM a)
 asyncDo shouldLink (AsyncRemoteTask d n c) =
   let proc = call d n c in asyncDo shouldLink AsyncTask { asyncTask = proc }
@@ -186,27 +190,25 @@ asyncDo shouldLink (AsyncTask proc) = do
                      _          -> liftIO $ atomically $ putTMVar result' (AsyncFailed d)
             | otherwise -> kill wpid "linkFailed"
 
--- | Check whether an 'AsyncSTM' has completed yet. The status of the
--- action is encoded in the returned 'AsyncResult'. If the action has not
--- completed, the result will be 'AsyncPending', or one of the other
--- constructors otherwise. This function does not block waiting for the result.
--- Use 'wait' or 'waitTimeout' if you need blocking/waiting semantics.
--- See 'Async'.
+-- | Check whether an 'AsyncSTM' has completed yet.
+--
+-- See "Control.Distributed.Process.Platform.Async".
 poll :: (Serializable a) => AsyncSTM a -> Process (AsyncResult a)
 poll hAsync = do
   r <- liftIO $ atomically $ pollSTM hAsync
   return $ fromMaybe (AsyncPending) r
 
 -- | Like 'poll' but returns 'Nothing' if @(poll hAsync) == AsyncPending@.
--- See 'poll'.
+--
+-- See "Control.Distributed.Process.Platform.Async".
 check :: (Serializable a) => AsyncSTM a -> Process (Maybe (AsyncResult a))
 check hAsync = poll hAsync >>= \r -> case r of
   AsyncPending -> return Nothing
   ar           -> return (Just ar)
 
--- | Wait for an asynchronous operation to complete or timeout. This variant
--- returns the 'AsyncResult' itself, which will be 'AsyncPending' if the
--- result has not been made available, otherwise one of the other constructors.
+-- | Wait for an asynchronous operation to complete or timeout.
+--
+-- See "Control.Distributed.Process.Platform.Async".
 waitCheckTimeout :: (Serializable a) =>
                     TimeInterval -> AsyncSTM a -> Process (AsyncResult a)
 waitCheckTimeout t hAsync =
@@ -216,17 +218,16 @@ waitCheckTimeout t hAsync =
 -- value. The result (which can include failure and/or cancellation) is
 -- encoded by the 'AsyncResult' type.
 --
--- > wait = liftIO . atomically . waitSTM
+-- @wait = liftIO . atomically . waitSTM@
 --
+-- See "Control.Distributed.Process.Platform.Async".
 {-# INLINE wait #-}
 wait :: AsyncSTM a -> Process (AsyncResult a)
 wait = liftIO . atomically . waitSTM
 
--- | Wait for an asynchronous operation to complete or timeout. Returns
--- @Nothing@ if the 'AsyncResult' does not change from @AsyncPending@ within
--- the specified delay, otherwise @Just asyncResult@ is returned. If you want
--- to wait/block on the 'AsyncResult' without the indirection of @Maybe@ then
--- consider using 'wait' or 'waitCheckTimeout' instead.
+-- | Wait for an asynchronous operation to complete or timeout.
+--
+-- See "Control.Distributed.Process.Platform.Async".
 waitTimeout :: (Serializable a) =>
                TimeInterval -> AsyncSTM a -> Process (Maybe (AsyncResult a))
 waitTimeout t hAsync = do
@@ -246,7 +247,7 @@ waitTimeoutSTM t hAsync =
   let t' = (asTimeout t)
   in liftIO $ timeout t' $ atomically $ waitSTM hAsync
 
--- | Wait for any of the supplied @AsyncChans@s to complete. If multiple
+-- | Wait for any of the supplied @AsyncSTM@s to complete. If multiple
 -- 'Async's complete, then the value returned corresponds to the first
 -- completed 'Async' in the list.
 --
@@ -272,53 +273,27 @@ waitAnyTimeout delay asyncs =
     r <- waitAnySTM asyncs
     return $ snd r
 
--- | Cancel an asynchronous operation. Cancellation is asynchronous in nature.
--- To wait for cancellation to complete, use 'cancelWait' instead. The notes
--- about the asynchronous nature of 'cancelWait' apply here also.
+-- | Cancel an asynchronous operation.
 --
--- See 'Control.Distributed.Process'
+-- See "Control.Distributed.Process.Platform.Async".
 cancel :: AsyncSTM a -> Process ()
 cancel (AsyncSTM _ g _) = send g CancelWait
 
 -- | Cancel an asynchronous operation and wait for the cancellation to complete.
--- Because of the asynchronous nature of message passing, the instruction to
--- cancel will race with the asynchronous worker, so it is /entirely possible/
--- that the 'AsyncResult' returned will not necessarily be 'AsyncCancelled'. For
--- example, the worker may complete its task after this function is called, but
--- before the cancellation instruction is acted upon.
 --
--- If you wish to stop an asychronous operation /immediately/ (with caveats)
--- then consider using 'cancelWith' or 'cancelKill' instead.
---
+-- See "Control.Distributed.Process.Platform.Async".
 cancelWait :: (Serializable a) => AsyncSTM a -> Process (AsyncResult a)
 cancelWait hAsync = cancel hAsync >> wait hAsync
 
 -- | Cancel an asynchronous operation immediately.
--- This operation is performed by sending an /exit signal/ to the asynchronous
--- worker, which leads to the following semantics:
 --
--- 1. if the worker already completed, this function has no effect
--- 2. the worker might complete after this call, but before the signal arrives
--- 3. the worker might ignore the exit signal using @catchExit@
---
--- In case of (3), this function has no effect. You should use 'cancel'
--- if you need to guarantee that the asynchronous task is unable to ignore
--- the cancellation instruction.
---
--- You should also consider that when sending exit signals to a process, the
--- definition of 'immediately' is somewhat vague and a scheduler might take
--- time to handle the request, which can lead to situations similar to (1) as
--- listed above, if the scheduler to which the calling process' thread is bound
--- decides to GC whilst another scheduler on which the worker is running is able
--- to continue.
---
--- See 'Control.Distributed.Process.exit'
+-- See "Control.Distributed.Process.Platform.Async".
 cancelWith :: (Serializable b) => b -> AsyncSTM a -> Process ()
 cancelWith reason = (flip exit) reason . _asyncWorker
 
 -- | Like 'cancelWith' but sends a @kill@ instruction instead of an exit.
 --
--- See 'Control.Distributed.Process.kill'
+-- See 'Control.Distributed.Process.Platform.Async'.
 cancelKill :: String -> AsyncSTM a -> Process ()
 cancelKill reason = (flip kill) reason . _asyncWorker
 

@@ -6,7 +6,7 @@
 
 -- | shared, internal types for the Async package
 module Control.Distributed.Process.Platform.Async.Types
- ( -- types/data
+ ( -- * Exported types
     Async(..)
   , AsyncRef
   , AsyncTask(..)
@@ -36,16 +36,18 @@ data Async a = Async {
 -- | A reference to an asynchronous action
 type AsyncRef = ProcessId
 
--- | A task to be performed asynchronously. This can either take the
--- form of an action that runs over some type @a@ in the @Process@ monad,
--- or a static 'SerializableDict' and @Closure (Process a)@ neccessary for the
--- task to be spawned on a remote node.
+-- | A task to be performed asynchronously.
 data AsyncTask a =
-    AsyncTask { asyncTask :: Process a }
+    AsyncTask {
+        asyncTask :: Process a -- ^ the task to be performed
+      }
   | AsyncRemoteTask {
         asyncTaskDict :: Static (SerializableDict a)
+          -- ^ the serializable dict required to spawn a remote process
       , asyncTaskNode :: NodeId
+          -- ^ the node on which to spawn the asynchronous task
       , asyncTaskProc :: Closure (Process a)
+          -- ^ the task to be performed, wrapped in a closure environment
       }
 
 -- | Represents the result of an asynchronous action, which can be in one of
