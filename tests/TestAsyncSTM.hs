@@ -145,7 +145,7 @@ testAsyncWaitAny result = do
   r2 <- waitAny [p2, p3]
   r3 <- waitAny [p1, p2, p3]
 
-  stash result $ [r1, r2, r3]
+  stash result $ map snd [r1, r2, r3]
 
 testAsyncWaitAnyTimeout :: TestResult (Maybe (AsyncResult String)) -> Process ()
 testAsyncWaitAnyTimeout result = do

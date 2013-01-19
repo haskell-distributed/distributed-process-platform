@@ -57,6 +57,10 @@ module Control.Distributed.Process.Platform.Async.AsyncSTM
     -- * STM versions
   , pollSTM
   , waitTimeoutSTM
+  , waitAnyCancel
+  , waitEither
+  , waitEither_
+  , waitBoth
   ) where
 
 import Control.Applicative
@@ -247,14 +251,56 @@ waitTimeoutSTM t hAsync =
 --
 -- NB: Unlike @AsyncChan@, 'AsyncSTM' does not discard its 'AsyncResult' once
 -- read, therefore the semantics of this function are different to the
--- former.
+-- former. Specifically, if @asyncs = [a1, a2, a3]@ and @(AsyncDone _) = a1@
+-- then the remaining @a2, a3@ will never be returned by 'waitAny'.
 --
 waitAny :: (Serializable a)
         => [AsyncSTM a]
-        -> Process (AsyncResult a)
+        -> Process (AsyncSTM a, AsyncResult a)
 waitAny asyncs = do
   r <- liftIO $ waitAnySTM asyncs
-  return $ snd r
+  return r
+
+-- | Like 'waitAny', but also cancels the other asynchronous
+-- operations as soon as one has completed.
+--
+waitAnyCancel :: (Serializable a)
+              => [AsyncSTM a] -> Process (AsyncSTM a, AsyncResult a)
+waitAnyCancel asyncs =
+  waitAny asyncs `finally` mapM_ cancel asyncs
+
+-- | Wait for the first of two @AsyncSTM@s to finish.
+--
+waitEither :: AsyncSTM a
+              -> AsyncSTM b
+              -> Process (Either (AsyncResult a) (AsyncResult b))
+waitEither left right =
+  liftIO $ atomically $
+    (Left  <$> waitSTM left)
+      `orElse`
+    (Right <$> waitSTM right)
+
+-- | Like 'waitEither', but the result is ignored.
+--
+waitEither_ :: AsyncSTM a -> AsyncSTM b -> Process ()
+waitEither_ left right =
+  liftIO $ atomically $
+    (void $ waitSTM left)
+      `orElse`
+    (void $ waitSTM right)
+
+-- | Waits for both @AsyncSTM@s to finish.
+--
+waitBoth :: AsyncSTM a
+            -> AsyncSTM b
+            -> Process ((AsyncResult a), (AsyncResult b))
+waitBoth left right =
+  liftIO $ atomically $ do
+    a <- waitSTM left
+           `orElse`
+         (waitSTM right >> retry)
+    b <- waitSTM right
+    return (a,b)
 
 -- | Like 'waitAny' but times out after the specified delay.
 waitAnyTimeout :: (Serializable a)
