@@ -140,15 +140,17 @@ asyncDo shouldLink (AsyncRemoteTask d n c) =
 asyncDo shouldLink (AsyncTask proc) = do
     root <- getSelfPid
     result <- liftIO $ newEmptyTMVarIO
+    sigStart <- liftIO $ newEmptyTMVarIO
+    (sp, rp) <- newChan
 
     -- listener/response proxy
     mPid <- spawnLocal $ do
         wPid <- spawnLocal $ do
-            () <- expect
+            liftIO $ atomically $ takeTMVar sigStart
             r <- proc
             void $ liftIO $ atomically $ putTMVar result (AsyncDone r)
 
-        send root wPid   -- let the parent process know the worker pid
+        sendChan sp wPid  -- let the parent process know the worker pid
 
         wref <- monitor wPid
         rref <- case shouldLink of
@@ -158,8 +160,9 @@ asyncDo shouldLink (AsyncTask proc) = do
                 (unmonitor wref >>
                     return (maybe (return ()) unmonitor rref))
 
-    workerPid <- expect
-    send workerPid ()
+    -- [BUG]: this might not be at the head of the queue!
+    workerPid <- receiveChan rp
+    liftIO $ atomically $ putTMVar sigStart ()
 
     return AsyncSTM {
           _asyncWorker  = workerPid
