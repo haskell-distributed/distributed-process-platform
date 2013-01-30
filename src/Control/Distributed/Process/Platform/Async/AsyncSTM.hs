@@ -144,29 +144,28 @@ asyncDo shouldLink (AsyncTask proc) = do
     (sp, rp) <- newChan
 
     -- listener/response proxy
-    mPid <- spawnLocal $ do
-        wPid <- spawnLocal $ do
+    insulator <- spawnLocal $ do
+        worker <- spawnLocal $ do
             liftIO $ atomically $ takeTMVar sigStart
             r <- proc
             void $ liftIO $ atomically $ putTMVar result (AsyncDone r)
 
-        sendChan sp wPid  -- let the parent process know the worker pid
+        sendChan sp worker  -- let the parent process know the worker pid
 
-        wref <- monitor wPid
+        wref <- monitor worker
         rref <- case shouldLink of
                     True  -> monitor root >>= return . Just
                     False -> return Nothing
-        finally (pollUntilExit wPid result)
+        finally (pollUntilExit worker result)
                 (unmonitor wref >>
                     return (maybe (return ()) unmonitor rref))
 
-    -- [BUG]: this might not be at the head of the queue!
     workerPid <- receiveChan rp
     liftIO $ atomically $ putTMVar sigStart ()
 
     return AsyncSTM {
           _asyncWorker  = workerPid
-        , _asyncMonitor = mPid
+        , _asyncMonitor = insulator
         , _asyncWait    = (readTMVar result)
         }
 
