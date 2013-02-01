@@ -43,8 +43,8 @@ shutdown pid = cast pid Shutdown
 
 -- | Make a synchronous call - will block until a reply is received.
 -- The calling process will exit with 'TerminateReason' if the calls fails.
-call :: forall a b . (Serializable a, Serializable b)
-                 => ProcessId -> a -> Process b
+call :: forall s a b . (Addressable s, Serializable a, Serializable b)
+                 => s -> a -> Process b
 call sid msg = callAsync sid msg >>= wait >>= unpack -- note [call using async]
   where unpack :: AsyncResult b -> Process b
         unpack (AsyncDone   r)     = return r
@@ -56,8 +56,8 @@ call sid msg = callAsync sid msg >>= wait >>= unpack -- note [call using async]
 -- | Safe version of 'call' that returns information about the error
 -- if the operation fails. If an error occurs then the explanation will be
 -- will be stashed away as @(TerminateOther String)@.
-safeCall :: forall a b . (Serializable a, Serializable b)
-                 => ProcessId -> a -> Process (Either TerminateReason b)
+safeCall :: forall s a b . (Addressable s, Serializable a, Serializable b)
+                 => s -> a -> Process (Either TerminateReason b)
 safeCall s m = callAsync s m >>= wait >>= unpack    -- note [call using async]
   where unpack (AsyncDone   r)     = return $ Right r
         unpack (AsyncFailed r)     = return $ Left $ explain "CallFailed" r
