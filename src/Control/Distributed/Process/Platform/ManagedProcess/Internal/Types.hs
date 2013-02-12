@@ -24,7 +24,8 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
   , CallResponse(..)
   ) where
 
-import Control.Distributed.Process -- hiding (Message)
+import Control.Distributed.Process hiding (Message)
+import qualified Control.Distributed.Process as P (Message)
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Internal.Types
   ( Recipient(..)
@@ -115,7 +116,7 @@ data Dispatcher s =
 -- | Provides dispatch for any input, returns 'Nothing' for unhandled messages.
 data DeferredDispatcher s = DeferredDispatcher {
     dispatchInfo :: s
-                 -> AbstractMessage
+                 -> P.Message
                  -> Process (Maybe (ProcessAction s))
   }
 
@@ -123,16 +124,16 @@ data DeferredDispatcher s = DeferredDispatcher {
 data ExitSignalDispatcher s = ExitSignalDispatcher {
     dispatchExit :: s
                  -> ProcessId
-                 -> AbstractMessage
+                 -> P.Message
                  -> Process (Maybe (ProcessAction s))
   }
 
 class MessageMatcher d where
-    matchMessage :: UnhandledMessagePolicy -> s -> d s -> Match (ProcessAction s)
+    matchDispatch :: UnhandledMessagePolicy -> s -> d s -> Match (ProcessAction s)
 
 instance MessageMatcher Dispatcher where
-  matchMessage _ s (Dispatch   d)      = match (d s)
-  matchMessage _ s (DispatchIf d cond) = matchIf (cond s) (d s)
+  matchDispatch _ s (Dispatch   d)      = match (d s)
+  matchDispatch _ s (DispatchIf d cond) = matchIf (cond s) (d s)
 
 -- | Policy for handling unexpected messages, i.e., messages which are not
 -- sent using the 'call' or 'cast' APIs, and which are not handled by any of the

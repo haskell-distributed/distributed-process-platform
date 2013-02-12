@@ -6,7 +6,8 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.GenProcess
   (recvLoop) where
 
 import Control.Concurrent (threadDelay)
-import Control.Distributed.Process hiding (call)
+import Control.Distributed.Process hiding (call, Message)
+import qualified Control.Distributed.Process as P (Message)
 import Control.Distributed.Process.Platform.ManagedProcess.Server
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import Control.Distributed.Process.Platform.Internal.Types
@@ -25,8 +26,8 @@ recvLoop pDef pState recvDelay =
   let p             = unhandledMessagePolicy pDef
       handleTimeout = timeoutHandler pDef
       handleStop    = terminateHandler pDef
-      shutdown'     = matchMessage p pState shutdownHandler
-      matchers      = map (matchMessage p pState) (apiHandlers pDef)
+      shutdown'     = matchDispatch p pState shutdownHandler
+      matchers      = map (matchDispatch p pState) (apiHandlers pDef)
       ex'           = (exitHandlers pDef) ++ [trapExit]
       ms' = (shutdown':matchers) ++ matchAux p pState (infoHandlers pDef)
   in do
@@ -51,7 +52,7 @@ block i = liftIO $ threadDelay (asTimeout i)
 
 applyPolicy :: UnhandledMessagePolicy
             -> s
-            -> AbstractMessage
+            -> P.Message
             -> Process (ProcessAction s)
 applyPolicy p s m =
   case p of
@@ -65,10 +66,10 @@ matchAux :: UnhandledMessagePolicy
          -> [Match (ProcessAction s)]
 matchAux p ps ds = [matchAny (auxHandler (applyPolicy p ps) ps ds)]
 
-auxHandler :: (AbstractMessage -> Process (ProcessAction s))
+auxHandler :: (P.Message -> Process (ProcessAction s))
            -> s
            -> [DeferredDispatcher s]
-           -> AbstractMessage
+           -> P.Message
            -> Process (ProcessAction s)
 auxHandler policy _  [] msg = policy msg
 auxHandler policy st (d:ds :: [DeferredDispatcher s]) msg

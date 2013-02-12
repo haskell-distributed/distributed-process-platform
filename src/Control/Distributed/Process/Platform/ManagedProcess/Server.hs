@@ -39,7 +39,8 @@ module Control.Distributed.Process.Platform.ManagedProcess.Server
   , handleCastIf_
   ) where
 
-import Control.Distributed.Process hiding (call)
+import Control.Distributed.Process hiding (call, Message)
+import qualified Control.Distributed.Process as P (Message)
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import Control.Distributed.Process.Platform.Internal.Primitives
@@ -362,9 +363,9 @@ handleInfo h = DeferredDispatcher { dispatchInfo = doHandleInfo h }
     doHandleInfo :: forall s2 a2. (Serializable a2)
                              => (s2 -> a2 -> Process (ProcessAction s2))
                              -> s2
-                             -> AbstractMessage
+                             -> P.Message
                              -> Process (Maybe (ProcessAction s2))
-    doHandleInfo h' s msg = maybeHandleMessage msg (h' s)
+    doHandleInfo h' s msg = handleMessage msg (h' s)
 
 -- | Creates an /exit handler/ scoped to the execution of any and all the
 -- registered call, cast and info handlers for the process.
@@ -376,9 +377,9 @@ handleExit h = ExitSignalDispatcher { dispatchExit = doHandleExit h }
     doHandleExit :: (s -> ProcessId -> a -> Process (ProcessAction s))
                  -> s
                  -> ProcessId
-                 -> AbstractMessage
+                 -> P.Message
                  -> Process (Maybe (ProcessAction s))
-    doHandleExit h' s p msg = maybeHandleMessage msg (h' s p)
+    doHandleExit h' s p msg = handleMessage msg (h' s p)
 
 -- handling 'reply-to' in the main process loop is awkward at best,
 -- so we handle it here instead and return the 'action' to the loop
