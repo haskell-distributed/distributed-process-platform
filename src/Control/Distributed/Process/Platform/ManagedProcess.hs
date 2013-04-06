@@ -159,9 +159,9 @@
 -- shut down the process, calling the @terminateHandler@ as usual, before
 -- stopping with @TerminateShutdown@ given as the final outcome.
 --
--- /Example: How to annoy your supervisor and end up force-killed:/
+-- /Example: handling custom data is @ProcessExitException@/
 --
--- > handleExit  (\state from (sigExit :: Shutdown) -> continue s)
+-- > handleExit  (\state from (sigExit :: SomeExitData) -> continue s)
 --
 -- That code is, of course, very silly. Under some circumstances, handling
 -- exit signals is perfectly legitimate. Handling of /other/ forms of
