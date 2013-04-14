@@ -8,6 +8,10 @@ import Control.Distributed.Process.Platform.Timer
 import Network.Transport.TCP (createTransportExposeInternals, defaultTCPParameters)
 import Prelude hiding (catch)
 
+import Data.Time.Clock (getCurrentTime)
+import Data.Time.Format (formatTime)
+import System.Locale (defaultTimeLocale)
+
 main :: IO ()
 main = do
   node <- startLocalNode
@@ -20,14 +24,14 @@ doWork = do
   server <- startServer
   _      <- monitor server
 
-  mapM_ (\(n :: Int) -> (call server ("bar" ++ (show n))) :: Process ()) [1..800]
+  mapM_ (\(n :: Int) -> (call server) :: Process ()) [1..800]
   -- mapM_ (\(n :: Int) -> (cast server ("bar" ++ (show n))) :: Process ()) [1..800]
   sleep $ seconds 1
   shutdown server
 
   receiveWait [ match (\(ProcessMonitorNotification _ _ _) -> return ()) ]
   say "server stopped..."
-  sleep $ seconds 10
+  sleep $ seconds 2
 
 startLocalNode :: IO LocalNode
 startLocalNode = do
@@ -40,19 +44,22 @@ startLocalNode = do
 shutdown :: ProcessId -> Process ()
 shutdown pid = send pid ()
 
-call :: ProcessId -> String -> Process ()
-call pid msg = do
-    self <- getSelfPid
-    send pid (self, msg)
-    expect
+call :: ProcessId -> Process ()
+call pid = do
+    (sp, rp) <- newChan :: Process (SendPort String, ReceivePort String)
+    send pid sp
+    n <- receiveChan rp
+    return ()
 
 startServer :: Process ProcessId
 startServer = spawnLocal listen
   where listen = do
           receiveWait [
-              match (\(pid, s :: String) -> do
-                        say $ "got " ++ (show s)
-                        send pid ())
+              match (\sp -> do
+                        now <- liftIO getCurrentTime
+                        us  <- getSelfPid
+                        let n = formatTime defaultTimeLocale "[%d-%m-%Y] [%H:%M:%S-%q]" now
+                        sendChan sp n)
             , match (\() -> die "terminating")
             ]
           listen
