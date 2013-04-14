@@ -12,6 +12,10 @@ import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (formatTime)
 import System.Locale (defaultTimeLocale)
 
+{-# INLINE forever' #-}
+forever' :: Monad m => m a -> m b
+forever' a = let a' = a >> a' in a'
+
 main :: IO ()
 main = do
   node <- startLocalNode
@@ -19,19 +23,39 @@ main = do
   closeLocalNode node
   return ()
 
+doNoWork :: Process ()
+doNoWork = do
+  mapM_ (\(n :: Int) -> newChan :: Process (SendPort (), ReceivePort ())) [1..800]
+  -- mapM_ (\(n :: Int) -> (cast server ("bar" ++ (show n))) :: Process ()) [1..800]
+  sleep $ seconds 3
+
+doWorkSimple :: Process ()
+doWorkSimple = do
+  server <- spawnLocal $ forever' $ do
+    receiveWait [ match (\(s :: String) -> do
+                            now <- liftIO getCurrentTime
+                            us  <- getSelfPid
+                            let n = formatTime defaultTimeLocale
+                                               "[%d-%m-%Y] [%H:%M:%S-%q]"
+                                               now
+                            return (show n) >> return ()) ]
+
+  mapM_ (\(n :: Int) -> (send server ("bar" ++ (show n))) :: Process ()  ) [1..800]
+  sleep $ seconds 2
+
 doWork :: Process ()
 doWork = do
   server <- startServer
   _      <- monitor server
 
-  mapM_ (\(n :: Int) -> (call server) :: Process ()) [1..800]
+  mapM_ (\(n :: Int) -> (callAsync server) :: Process ()) [1..800]
   -- mapM_ (\(n :: Int) -> (cast server ("bar" ++ (show n))) :: Process ()) [1..800]
   sleep $ seconds 1
   shutdown server
 
   receiveWait [ match (\(ProcessMonitorNotification _ _ _) -> return ()) ]
   say "server stopped..."
-  sleep $ seconds 2
+  sleep $ seconds 5
 
 startLocalNode :: IO LocalNode
 startLocalNode = do
@@ -44,22 +68,29 @@ startLocalNode = do
 shutdown :: ProcessId -> Process ()
 shutdown pid = send pid ()
 
+callAsync :: ProcessId -> Process ()
+callAsync pid = do
+  asyncRef <- async $ AsyncTask $ do
+    getSelfPid >>= send pid
+    expect :: Process String
+  (AsyncDone _) <- wait asyncRef
+  return ()
+
 call :: ProcessId -> Process ()
 call pid = do
-    (sp, rp) <- newChan :: Process (SendPort String, ReceivePort String)
-    send pid sp
-    n <- receiveChan rp
+    self <- getSelfPid
+    send pid self
+    n <- expect :: Process String
     return ()
 
 startServer :: Process ProcessId
 startServer = spawnLocal listen
   where listen = do
           receiveWait [
-              match (\sp -> do
+              match (\pid -> do
                         now <- liftIO getCurrentTime
-                        us  <- getSelfPid
                         let n = formatTime defaultTimeLocale "[%d-%m-%Y] [%H:%M:%S-%q]" now
-                        sendChan sp n)
+                        send pid n)
             , match (\() -> die "terminating")
             ]
           listen
