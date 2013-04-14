@@ -2,7 +2,7 @@ module Main where
 
 import Control.Distributed.Process hiding (call)
 import Control.Distributed.Process.Node
-import Control.Distributed.Process.Platform.Async
+import Control.Distributed.Process.Platform.Async.AsyncChan
 import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process.Platform.Timer
 import Network.Transport.TCP (createTransportExposeInternals, defaultTCPParameters)
@@ -11,12 +11,12 @@ import Prelude hiding (catch)
 main :: IO ()
 main = do
   node <- startLocalNode
-  runProcess node worker
+  runProcess node doWork
   closeLocalNode node
   return ()
 
-worker :: Process ()
-worker = do
+doWork :: Process ()
+doWork = do
   server <- startServer
   _      <- monitor server
 
@@ -27,7 +27,7 @@ worker = do
 
   receiveWait [ match (\(ProcessMonitorNotification _ _ _) -> return ()) ]
   say "server stopped..."
-  sleep $ seconds 1
+  sleep $ seconds 10
 
 startLocalNode :: IO LocalNode
 startLocalNode = do
@@ -42,30 +42,17 @@ shutdown pid = send pid ()
 
 call :: ProcessId -> String -> Process ()
 call pid msg = do
-    asyncRef <- async $ do
-      mRef <- monitor pid
-      self <- getSelfPid
-      send pid (self, msg)
-      r <- receiveWait [
-            match (\() -> return Nothing)
-          , matchIf
-                (\(ProcessMonitorNotification ref _ _)    -> ref == mRef)
-                (\(ProcessMonitorNotification _ _ reason) -> return (Just reason))
-          ]
-      unmonitor mRef
-      case r of
-        Nothing  -> return ()
-        Just err -> die $ "ServerExit (" ++ (show err) ++ ")"
-    asyncResult <- wait asyncRef
-    case asyncResult of
-      (AsyncDone ()) -> return ()
-      _              -> die "unexpected async result"
+    self <- getSelfPid
+    send pid (self, msg)
+    expect
 
 startServer :: Process ProcessId
 startServer = spawnLocal listen
   where listen = do
           receiveWait [
-              match (\(pid, _ :: String) -> say "got string" >> send pid ())
+              match (\(pid, s :: String) -> do
+                        say $ "got " ++ (show s)
+                        send pid ())
             , match (\() -> die "terminating")
             ]
           listen
