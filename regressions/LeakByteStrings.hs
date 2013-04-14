@@ -2,10 +2,9 @@ module Main where
 
 import Control.Distributed.Process hiding (call)
 import Control.Distributed.Process.Node
-import Control.Distributed.Process.Platform.ManagedProcess hiding (runProcess)
+import Control.Distributed.Process.Platform.Async
 import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process.Platform.Timer
-import Control.Exception (SomeException)
 import Network.Transport.TCP (createTransportExposeInternals, defaultTCPParameters)
 import Prelude hiding (catch)
 
@@ -38,19 +37,36 @@ startLocalNode = do
   node <- newLocalNode transport initRemoteTable
   return node
 
-startServer :: Process ProcessId
-startServer = do
-  sid <- spawnLocal $  do
-      catch (start () (statelessInit Infinity) serverDefinition >> return ())
-            (\(e :: SomeException) -> say $ "failed with " ++ (show e))
-  return sid
+shutdown :: ProcessId -> Process ()
+shutdown pid = send pid ()
 
-serverDefinition :: ProcessDefinition ()
-serverDefinition =
-  statelessProcess {
-     apiHandlers = [
-          handleCall_ (\(_ :: String) -> say "called received string.." >> return ())
-        , handleCast  (\s (_ :: String) -> say "cast received string.." >> continue s)
-        ]
-  }
+call :: ProcessId -> String -> Process ()
+call pid msg = do
+    asyncRef <- async $ do
+      mRef <- monitor pid
+      self <- getSelfPid
+      send pid (self, msg)
+      r <- receiveWait [
+            match (\() -> return Nothing)
+          , matchIf
+                (\(ProcessMonitorNotification ref _ _)    -> ref == mRef)
+                (\(ProcessMonitorNotification _ _ reason) -> return (Just reason))
+          ]
+      unmonitor mRef
+      case r of
+        Nothing  -> return ()
+        Just err -> die $ "ServerExit (" ++ (show err) ++ ")"
+    asyncResult <- wait asyncRef
+    case asyncResult of
+      (AsyncDone ()) -> return ()
+      _              -> die "unexpected async result"
+
+startServer :: Process ProcessId
+startServer = spawnLocal listen
+  where listen = do
+          receiveWait [
+              match (\(pid, _ :: String) -> say "got string" >> send pid ())
+            , match (\() -> die "terminating")
+            ]
+          listen
 
