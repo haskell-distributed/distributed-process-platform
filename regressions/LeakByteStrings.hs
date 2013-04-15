@@ -2,9 +2,13 @@ module Main where
 
 import Control.Distributed.Process hiding (call)
 import Control.Distributed.Process.Node
-import Control.Distributed.Process.Platform.Async.AsyncChan
+import Control.Distributed.Process.Platform.Async.AsyncChan hiding (worker)
+import Control.Distributed.Process.Platform.ManagedProcess hiding
+  (call, callAsync, shutdown, runProcess)
+import qualified Control.Distributed.Process.Platform.ManagedProcess as P (call, shutdown)
 import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process.Platform.Timer
+import Control.Exception (SomeException)
 import Network.Transport.TCP (createTransportExposeInternals, defaultTCPParameters)
 import Prelude hiding (catch)
 
@@ -19,9 +23,23 @@ forever' a = let a' = a >> a' in a'
 main :: IO ()
 main = do
   node <- startLocalNode
-  runProcess node doWork
+  runProcess node doWorkSimple
   closeLocalNode node
   return ()
+
+worker :: Process ()
+worker = do
+  server <- startGenServer
+  _      <- monitor server
+
+  mapM_ (\(n :: Int) -> (P.call server ("bar" ++ (show n))) :: Process String) [1..800]
+  -- mapM_ (\(n :: Int) -> (cast server ("bar" ++ (show n))) :: Process ()) [1..800]
+  sleep $ seconds 1
+  P.shutdown server
+
+  receiveWait [ match (\(ProcessMonitorNotification _ _ _) -> return ()) ]
+  say "server stopped..."
+  sleep $ seconds 5
 
 doNoWork :: Process ()
 doNoWork = do
@@ -32,16 +50,12 @@ doNoWork = do
 doWorkSimple :: Process ()
 doWorkSimple = do
   server <- spawnLocal $ forever' $ do
-    receiveWait [ match (\(s :: String) -> do
-                            now <- liftIO getCurrentTime
-                            us  <- getSelfPid
-                            let n = formatTime defaultTimeLocale
-                                               "[%d-%m-%Y] [%H:%M:%S-%q]"
-                                               now
-                            return (show n) >> return ()) ]
+    receiveWait [ match (\(pid, _ :: String) -> send pid ()) ]
 
-  mapM_ (\(n :: Int) -> (send server ("bar" ++ (show n))) :: Process ()  ) [1..800]
-  sleep $ seconds 2
+  mapM_ (\(n :: Int) -> (call server (show n)) :: Process ()  ) [1..800]
+  sleep $ seconds 4
+  say "done"
+  sleep $ seconds 1
 
 doWork :: Process ()
 doWork = do
@@ -76,12 +90,11 @@ callAsync pid = do
   (AsyncDone _) <- wait asyncRef
   return ()
 
-call :: ProcessId -> Process ()
-call pid = do
+call :: ProcessId -> String -> Process ()
+call pid s = do
     self <- getSelfPid
-    send pid self
-    n <- expect :: Process String
-    return ()
+    send pid (self, s)
+    expect :: Process ()
 
 startServer :: Process ProcessId
 startServer = spawnLocal listen
@@ -94,4 +107,21 @@ startServer = spawnLocal listen
             , match (\() -> die "terminating")
             ]
           listen
+
+startGenServer :: Process ProcessId
+startGenServer = do
+  sid <- spawnLocal $  do
+      catch (start () (statelessInit Infinity) serverDefinition >> return ())
+            (\(e :: SomeException) -> say $ "failed with " ++ (show e))
+  return sid
+
+serverDefinition :: ProcessDefinition ()
+serverDefinition =
+  statelessProcess {
+     apiHandlers = [
+          handleCall_ (\(s :: String) -> return s)
+        , handleCast  (\s (_ :: String) -> continue s)
+        ]
+  }
+
 
