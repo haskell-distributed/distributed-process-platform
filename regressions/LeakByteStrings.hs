@@ -25,14 +25,14 @@ forever' a = let a' = a >> a' in a'
 main :: IO ()
 main = do
   node <- startLocalNode
---  runProcess node $ doWork True True
---  runProcess node $ doWork False False
+  runProcess node $ doWork True False
+  runProcess node $ doWork False False
 --  runProcess node $ doWork True False
 
-  runProcess node worker
-  runProcess node $ do
-    sleep $ seconds 10
-    say "done...."
+--  runProcess node worker
+--  runProcess node $ do
+--    sleep $ seconds 10
+--    say "done...."
   threadDelay $ (1*1000000)
   closeLocalNode node
   return ()
