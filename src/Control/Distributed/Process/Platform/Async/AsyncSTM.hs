@@ -1,7 +1,8 @@
-{-# LANGUAGE DeriveDataTypeable        #-}
-{-# LANGUAGE TemplateHaskell           #-}
-{-# LANGUAGE StandaloneDeriving        #-}
-{-# LANGUAGE TypeFamilies              #-}
+{-# LANGUAGE DeriveDataTypeable  #-}
+{-# LANGUAGE TemplateHaskell     #-}
+{-# LANGUAGE StandaloneDeriving  #-}
+{-# LANGUAGE TypeFamilies        #-}
+{-# LANGUAGE CPP                 #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -63,6 +64,10 @@ module Control.Distributed.Process.Platform.Async.AsyncSTM
   , waitBoth
   ) where
 
+#if ! MIN_VERSION_base(4,6,0)
+import Prelude hiding (catch)
+#endif
+
 import Control.Applicative
 import Control.Concurrent.STM hiding (check)
 import Control.Distributed.Process
@@ -80,7 +85,7 @@ import Control.Monad
 import Data.Maybe
   ( fromMaybe
   )
-import Prelude hiding (catch)
+
 import System.Timeout (timeout)
 
 --------------------------------------------------------------------------------

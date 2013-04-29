@@ -3,7 +3,34 @@
 {-# LANGUAGE DeriveDataTypeable         #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-module Control.Distributed.Process.Platform.ManagedProcess.SafeServer
+-----------------------------------------------------------------------------
+-- |
+-- Module      :  Control.Distributed.Process.Platform.ManagedProcess.Server.Pure
+-- Copyright   :  (c) Tim Watson 2012 - 2013
+-- License     :  BSD3 (see the file LICENSE)
+--
+-- Maintainer  :  Tim Watson <watson.timothy@gmail.com>
+-- Stability   :  experimental
+-- Portability :  non-portable (requires concurrency)
+--
+-- A /safe/ variant of the Server Portion of the /Managed Process/ API. Most
+-- of these operations have the same names as similar operations in the impure
+-- @Server@ module (re-exported by the primary API in @ManagedProcess@). To
+-- remove the ambiguity, some combination of either qualification and/or the
+-- @hiding@ clause will be required.
+--
+-- [Safe Server Callbacks]
+--
+-- The idea behind this module is to provide /safe/ callbacks, i.e., server
+-- code that is free from side effects. This safety is enforced by the type
+-- system via the @RestrictedProcess@ monad. A StateT interface is provided
+-- for code running in the @RestrictedProcess@ monad, so that server side
+-- state can be managed safely without resorting to IO (or code running in
+-- the @Process@ monad).
+--
+-----------------------------------------------------------------------------
+
+module Control.Distributed.Process.Platform.ManagedProcess.Server.Pure
   ( -- * Exported Types
     RestrictedProcess
   , Result(..)
@@ -13,8 +40,10 @@ module Control.Distributed.Process.Platform.ManagedProcess.SafeServer
   , handleCallIf
   , handleCast
   , handleCastIf
+  , handleInfo
+  , handleExit
+  , handleTimeout
     -- * Handling Process State
-  , say
   , putState
   , getState
   , modifyState
@@ -26,6 +55,8 @@ module Control.Distributed.Process.Platform.ManagedProcess.SafeServer
   , timeoutAfter
   , hibernate
   , stop
+    -- * Utilities
+  , say
   ) where
 
 import Control.Applicative (Applicative)
@@ -71,16 +102,16 @@ data Result a =
 
 -- | The result of a safe 'cast' handler's execution.
 data SafeAction =
-    SafeContinue
-  | SafeTimeout   TimeInterval
-  | SafeHibernate TimeInterval
-  | SafeStop      TerminateReason
+    SafeContinue                  -- ^ continue executing
+  | SafeTimeout   TimeInterval    -- ^ timeout if no messages are received
+  | SafeHibernate TimeInterval    -- ^ hibernate (i.e., sleep)
+  | SafeStop      TerminateReason -- ^ stop/terminate the server process
 
 --------------------------------------------------------------------------------
 -- Handling state in RestrictedProcess execution environments                 --
 --------------------------------------------------------------------------------
 
--- | Log a trace message using the underlying Process's `say'
+-- | Log a trace message using the underlying Process's @say@
 say :: String -> RestrictedProcess s ()
 say msg = lift . P.say $ msg
 
@@ -104,11 +135,15 @@ modifyState = ST.modify
 reply :: forall s r . (Serializable r) => r -> RestrictedProcess s (Result r)
 reply = return . Reply
 
+-- | Continue without giving a reply to the caller - equivalent to 'continue',
+-- but usable in a callback passed to the 'handleCall' family of functions.
 noReply :: forall s r . (Serializable r)
            => Result r
            -> RestrictedProcess s (Result r)
 noReply r = return r
 
+-- | Halt process execution during a call handler, without paying any attention
+-- to the expected return type.
 haltNoReply :: forall s r . (Serializable r)
            => TerminateReason
            -> RestrictedProcess s (Result r)
@@ -175,19 +210,43 @@ handleCastIf :: forall s a . (Serializable a)
                 -> (a -> RestrictedProcess s SafeAction)
                 -- ^ an action yielding function over the process state and input message
                 -> Dispatcher s
-handleCastIf cond h = Server.handleCastIf cond (wrapCast h)
+handleCastIf cond h = Server.handleCastIf cond (wrapHandler h)
+
+-- | A version of "Control.Distributed.Process.Platform.ManagedProcess.Server.handleInfo"
+-- that takes a handler which executes in 'RestrictedProcess'.
+--
+handleInfo :: forall s a. (Serializable a)
+           => (a -> RestrictedProcess s SafeAction)
+           -> DeferredDispatcher s
+-- cast and info look the same to a restricted process
+handleInfo h = Server.handleInfo (wrapHandler h)
+
+handleExit :: forall s a. (Serializable a)
+           => (a -> RestrictedProcess s SafeAction)
+           -> ExitSignalDispatcher s
+handleExit h = Server.handleExit $ \s _ a -> (wrapHandler h) s a
+
+handleTimeout :: forall s . (Delay -> RestrictedProcess s SafeAction)
+                         -> TimeoutHandler s
+handleTimeout h = \s d -> do
+  (r, s') <- runRestricted s (h d)
+  case r of
+    SafeContinue       -> Server.continue s'
+    (SafeTimeout   i)  -> Server.timeoutAfter i s'
+    (SafeHibernate i)  -> Server.hibernate    i s'
+    (SafeStop      r') -> Server.stop r'
 
 --------------------------------------------------------------------------------
 -- Implementation                                                             --
 --------------------------------------------------------------------------------
 
-wrapCast :: forall s a . (Serializable a)
+wrapHandler :: forall s a . (Serializable a)
             => (a -> RestrictedProcess s SafeAction)
             -> s
             -> a
             -> Process (ProcessAction s)
-wrapCast h s a = do
-  (r, s') <- runRestricted (h a) s
+wrapHandler h s a = do
+  (r, s') <- runRestricted s (h a)
   case r of
     SafeContinue       -> Server.continue s'
     (SafeTimeout   i)  -> Server.timeoutAfter i s'
@@ -200,15 +259,15 @@ wrapCall :: forall s a b . (Serializable a, Serializable b)
             -> a
             -> Process (ProcessReply s b)
 wrapCall h s a = do
-  (r, s') <- runRestricted (h a) s
+  (r, s') <- runRestricted s (h a)
   case r of
     (Reply       r') -> Server.reply r' s'
     (Timeout   i r') -> Server.timeoutAfter i s' >>= Server.replyWith r'
     (Hibernate i r') -> Server.hibernate    i s' >>= Server.replyWith r'
-    (Stop      r'' ) -> Server.stop r'' >>= Server.noReply
+    (Stop      r'' ) -> Server.stop r''          >>= Server.noReply
 
-runRestricted :: RestrictedProcess s a -> s -> Process (a, s)
-runRestricted proc state = ST.runStateT (unRestricted proc) state
+runRestricted :: s -> RestrictedProcess s a -> Process (a, s)
+runRestricted state proc = ST.runStateT (unRestricted proc) state
 
 -- | TODO MonadTrans instance? lift :: (Monad m) => m a -> t m a
 lift :: Process a -> RestrictedProcess s a

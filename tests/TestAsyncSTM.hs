@@ -17,7 +17,10 @@ import Control.Distributed.Process.Platform.Timer
 import Data.Binary()
 import Data.Typeable()
 import qualified Network.Transport as NT (Transport)
+
+#if ! MIN_VERSION_base(4,6,0)
 import Prelude hiding (catch)
+#endif
 
 import Test.Framework (Test, testGroup)
 import Test.Framework.Providers.HUnit (testCase)
