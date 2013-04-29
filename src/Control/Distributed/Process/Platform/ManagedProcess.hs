@@ -287,3 +287,4 @@ statelessProcess = ProcessDefinition {
 -- 'statelessProcess'.
 statelessInit :: Delay -> InitHandler () ()
 statelessInit d () = return $ InitOk () d
+

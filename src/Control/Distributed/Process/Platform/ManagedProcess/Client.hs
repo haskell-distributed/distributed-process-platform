@@ -2,7 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables        #-}
 
 -- | Client API
-module Control.Distributed.Process.Platform.ManagedProcess.Client 
+module Control.Distributed.Process.Platform.ManagedProcess.Client
   ( -- * API for client interactions with the process
     shutdown
   , call
@@ -12,7 +12,6 @@ module Control.Distributed.Process.Platform.ManagedProcess.Client
   , callTimeout
   , cast
   ) where
-
 
 import Control.Distributed.Process hiding (call)
 import Control.Distributed.Process.Serializable
