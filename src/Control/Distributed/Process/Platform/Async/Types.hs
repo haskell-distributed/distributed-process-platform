@@ -3,6 +3,7 @@
 {-# LANGUAGE StandaloneDeriving        #-}
 {-# LANGUAGE RankNTypes                #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE DeriveGeneric             #-}
 
 -- | shared, internal types for the Async package
 module Control.Distributed.Process.Platform.Async.Types
@@ -15,10 +16,14 @@ module Control.Distributed.Process.Platform.Async.Types
 
 import Control.Distributed.Process
 import Control.Distributed.Process.Platform.Time
-import Control.Distributed.Process.Serializable (SerializableDict)
+import Control.Distributed.Process.Serializable
+  ( Serializable
+  , SerializableDict
+  )
 import Data.Binary
-import Data.DeriveTH
 import Data.Typeable (Typeable)
+
+import GHC.Generics
 
 -- | An opaque handle that refers to an asynchronous operation.
 data Async a = Async {
@@ -54,8 +59,9 @@ data AsyncResult a =
   | AsyncLinkFailed DiedReason  -- ^ a link failure and the reason
   | AsyncCancelled              -- ^ a cancelled action
   | AsyncPending                -- ^ a pending action (that is still running)
-    deriving (Typeable)
-$(derive makeBinary ''AsyncResult)
+    deriving (Typeable, Generic)
+
+instance Serializable a => Binary (AsyncResult a) where
 
 deriving instance Eq a => Eq (AsyncResult a)
 deriving instance Show a => Show (AsyncResult a)

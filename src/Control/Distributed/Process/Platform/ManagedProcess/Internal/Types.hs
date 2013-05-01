@@ -1,6 +1,8 @@
 {-# LANGUAGE DeriveDataTypeable         #-}
 {-# LANGUAGE ExistentialQuantification  #-}
 {-# LANGUAGE TemplateHaskell            #-}
+{-# LANGUAGE DeriveGeneric              #-}
+{-# LANGUAGE StandaloneDeriving         #-}
 
 -- | Types used throughout the ManagedProcess framework
 module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
@@ -34,9 +36,11 @@ import Control.Distributed.Process.Platform.Internal.Types
 import Control.Distributed.Process.Platform.Time
 
 import Data.Binary hiding (decode)
-import Data.DeriveTH
 import Data.Typeable (Typeable)
+
 import Prelude hiding (init)
+
+import GHC.Generics
 
 --------------------------------------------------------------------------------
 -- API                                                                        --
@@ -45,12 +49,18 @@ import Prelude hiding (init)
 data Message a =
     CastMessage a
   | CallMessage a Recipient
-  deriving (Typeable)
-$(derive makeBinary ''Message)
+  deriving (Typeable, Generic)
+
+instance Serializable a => Binary (Message a) where
+deriving instance Eq a => Eq (Message a)
+deriving instance Show a => Show (Message a)
 
 data CallResponse a = CallResponse a
-  deriving (Typeable)
-$(derive makeBinary ''CallResponse)
+  deriving (Typeable, Generic)
+
+instance Serializable a => Binary (CallResponse a)
+deriving instance Eq a => Eq (CallResponse a)
+deriving instance Show a => Show (CallResponse a)
 
 -- | Return type for and 'InitHandler' expression.
 data InitResult s =
