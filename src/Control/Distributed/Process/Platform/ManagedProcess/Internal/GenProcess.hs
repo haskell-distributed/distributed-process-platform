@@ -1,7 +1,7 @@
 {-# LANGUAGE ExistentialQuantification  #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 
--- | Process implementations
+-- | This is the @Process@ implementation of a /managed process/ server
 module Control.Distributed.Process.Platform.ManagedProcess.Internal.GenProcess
   (recvLoop) where
 

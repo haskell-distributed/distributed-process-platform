@@ -1,7 +1,19 @@
 {-# LANGUAGE ExistentialQuantification  #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 
--- | Server process API
+-----------------------------------------------------------------------------
+-- |
+-- Module      :  Control.Distributed.Process.Platform.ManagedProcess.Server
+-- Copyright   :  (c) Tim Watson 2012 - 2013
+-- License     :  BSD3 (see the file LICENSE)
+--
+-- Maintainer  :  Tim Watson <watson.timothy@gmail.com>
+-- Stability   :  experimental
+-- Portability :  non-portable (requires concurrency)
+--
+-- The Server Portion of the /Managed Process/ API.
+-----------------------------------------------------------------------------
+
 module Control.Distributed.Process.Platform.ManagedProcess.Server
   ( -- * Server actions
     condition
@@ -151,6 +163,7 @@ stop r = return $ ProcessStop r
 stop_ :: TerminateReason -> (s -> Process (ProcessAction s))
 stop_ r _ = stop r
 
+-- | Sends a reply explicitly to a 'Recipient'.
 replyTo :: (Serializable m) => Recipient -> m -> Process ()
 replyTo client msg = sendTo client (CallResponse msg)
 
@@ -162,7 +175,7 @@ replyTo client msg = sendTo client (CallResponse msg)
 -- The handler expression returns the reply, and the action will be
 -- set to 'continue'.
 --
--- > handleCall_ = handleCallIf_ (const True)
+-- > handleCall_ = handleCallIf_ $ input (const True)
 --
 handleCall_ :: (Serializable a, Serializable b)
            => (a -> Process b)

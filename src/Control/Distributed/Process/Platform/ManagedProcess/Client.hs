@@ -1,7 +1,19 @@
 {-# LANGUAGE ExistentialQuantification  #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 
--- | Client API
+-----------------------------------------------------------------------------
+-- |
+-- Module      :  Control.Distributed.Process.Platform.ManagedProcess.Server
+-- Copyright   :  (c) Tim Watson 2012 - 2013
+-- License     :  BSD3 (see the file LICENSE)
+--
+-- Maintainer  :  Tim Watson <watson.timothy@gmail.com>
+-- Stability   :  experimental
+-- Portability :  non-portable (requires concurrency)
+--
+-- The Client Portion of the /Managed Process/ API.
+-----------------------------------------------------------------------------
+
 module Control.Distributed.Process.Platform.ManagedProcess.Client
   ( -- * API for client interactions with the process
     shutdown
