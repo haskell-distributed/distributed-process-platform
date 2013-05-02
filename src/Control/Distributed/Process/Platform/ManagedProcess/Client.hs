@@ -20,8 +20,8 @@ module Control.Distributed.Process.Platform.ManagedProcess.Client
   , call
   , safeCall
   , tryCall
-  , callAsync
   , callTimeout
+  , callAsync
   , cast
   ) where
 
@@ -37,6 +37,7 @@ import Control.Distributed.Process.Platform.Internal.Types
   )
 import Control.Distributed.Process.Platform.Internal.Common
 import Control.Distributed.Process.Platform.Time
+import Data.Maybe (fromJust)
 
 import Prelude hiding (init)
 
@@ -56,109 +57,108 @@ shutdown pid = cast pid Shutdown
 -- The calling process will exit with 'TerminateReason' if the calls fails.
 call :: forall s a b . (Addressable s, Serializable a, Serializable b)
                  => s -> a -> Process b
-call sid msg = callAsync sid msg >>= wait >>= unpack -- note [call using async]
-  where unpack :: AsyncResult b -> Process b
-        unpack (AsyncDone   r)     = return r
-        unpack (AsyncFailed r)     = die $ explain "CallFailed" r
-        unpack (AsyncLinkFailed r) = die $ explain "LinkFailed" r
-        unpack AsyncCancelled      = die $ TerminateOther $ "Cancelled"
-        unpack AsyncPending        = terminate -- as this *cannot* happen
+call sid msg = initCall sid msg >>= waitResponse Nothing >>= decodeResult
+  where decodeResult (Just (Right r))  = return r
+        decodeResult (Just (Left err)) = die err
 
 -- | Safe version of 'call' that returns information about the error
 -- if the operation fails. If an error occurs then the explanation will be
 -- will be stashed away as @(TerminateOther String)@.
 safeCall :: forall s a b . (Addressable s, Serializable a, Serializable b)
                  => s -> a -> Process (Either TerminateReason b)
-safeCall s m = callAsync s m >>= wait >>= unpack    -- note [call using async]
-  where unpack (AsyncDone   r)     = return $ Right r
-        unpack (AsyncFailed r)     = return $ Left $ explain "CallFailed" r
-        unpack (AsyncLinkFailed r) = return $ Left $ explain "LinkFailed" r
-        unpack AsyncCancelled      = return $ Left $ TerminateOther $ "Cancelled"
-        unpack AsyncPending        = return $ Left $ TerminateOther $ "Pending"
+safeCall s m = initCall s m >>= waitResponse Nothing >>= return . fromJust
 
 -- | Version of 'safeCall' that returns 'Nothing' if the operation fails. If
 -- you need information about *why* a call has failed then you should use
 -- 'safeCall' or combine @catchExit@ and @call@ instead.
 tryCall :: forall s a b . (Addressable s, Serializable a, Serializable b)
                  => s -> a -> Process (Maybe b)
-tryCall s m = callAsync s m >>= wait >>= unpack    -- note [call using async]
-  where unpack (AsyncDone r) = return $ Just r
-        unpack _             = return Nothing
+tryCall s m = initCall s m >>= waitResponse Nothing >>= decodeResult
+  where decodeResult (Just (Right r)) = return $ Just r
+        decodeResult _                = return Nothing
 
--- | Make a synchronous call, but timeout and return @Nothing@ if the reply
+-- | Make a synchronous call, but timeout and return @Nothing@ if a reply
 -- is not received within the specified time interval.
 --
 -- If the result of the call is a failure (or the call was cancelled) then
--- the calling process will exit, with the 'AsyncResult' given as the reason.
+-- the calling process will exit, with the 'TerminateReason' given as the reason.
 --
 callTimeout :: forall s a b . (Addressable s, Serializable a, Serializable b)
                  => s -> a -> TimeInterval -> Process (Maybe b)
-callTimeout s m d = callAsync s m >>= waitTimeout d >>= unpack
-  where unpack :: (Serializable b) => Maybe (AsyncResult b) -> Process (Maybe b)
-        unpack Nothing              = return Nothing
-        unpack (Just (AsyncDone r)) = return $ Just r
-        unpack (Just other)         = die other
+callTimeout s m d = initCall s m >>= waitResponse (Just d) >>= decodeResult
+  where decodeResult :: (Serializable b)
+               => Maybe (Either TerminateReason b)
+               -> Process (Maybe b)
+        decodeResult Nothing          = return Nothing
+        decodeResult (Just (Right m)) = return $ Just m
+        decodeResult (Just (Left r))  = die r
 
--- | Performs a synchronous 'call' to the the given server address, however the
--- call is made /out of band/ and an async handle is returned immediately. This
--- can be passed to functions in the /Async/ API in order to obtain the result.
+-- | Invokes 'call' /out of band/, and returns an "async handle."
 --
--- See "Control.Distributed.Process.Platform.Async"
+-- See "Control.Distributed.Process.Platform.Async".
 --
 callAsync :: forall s a b . (Addressable s, Serializable a, Serializable b)
-                 => s -> a -> Process (Async b)
-callAsync = callAsyncUsing async
-
--- | As 'callAsync' but takes a function that can be used to generate an async
--- task and return an async handle to it. This can be used to switch between
--- async implementations, by e.g., using an async channel instead of the default
--- STM based handle.
---
--- See "Control.Distributed.Process.Platform.Async"
---
-callAsyncUsing :: forall s a b . (Addressable s, Serializable a, Serializable b)
-                  => (Process b -> Process (Async b))
-                  -> s -> a -> Process (Async b)
-callAsyncUsing asyncStart sid msg = do
-  asyncStart $ do  -- note [call using async]
-    (Just pid) <- resolve sid
-    mRef <- monitor pid
-    wpid <- getSelfPid
-    sendTo sid $ CallMessage msg $ makeRef (Pid wpid) mRef
-    r <- receiveWait [
-            matchIf (\((CallResponse _ ref) :: CallResponse b) -> ref == mRef)
-                    (\((CallResponse m _) :: CallResponse b) -> return (Right m))
-          , matchIf (\(ProcessMonitorNotification ref _ _) -> ref == mRef)
-              (\(ProcessMonitorNotification _ _ reason) -> return (Left reason))
-        ]
-    -- TODO: better failure API
-    unmonitor mRef
-    case r of
-      Right m  -> return m
-      Left err -> die $ TerminateOther ("ServerExit (" ++ (show err) ++ ")")
-
--- note [call using async]
--- One problem with using plain expect/receive primitives to perform a
--- synchronous (round trip) call is that a reply matching the expected type
--- could come from anywhere! The Call.hs module uses a unique integer tag to
--- distinguish between inputs but this is easy to forge, as is tagging the
--- response with the sender's pid.
---
--- The approach we take here is to rely on AsyncSTM (by default) to insulate us
--- from erroneous incoming messages without the need for tagging. The /handle/
--- returned uses an @STM (AsyncResult a)@ field to handle the response /and/
--- the implementation spawns a new process to perform the actual call and
--- await the reply before atomically updating the result. Whilst in theory,
--- given a hypothetical 'listAllProcesses' primitive, it might be possible for
--- malacious code to obtain the ProcessId of the worker and send a false reply,
--- the likelihood of this is small enough that it seems reasonable to assume
--- we've solved the problem without the need for tags or globally unique
--- identifiers.
+          => s -> a -> Process (Async b)
+callAsync server msg = async $ call server msg
 
 -- | Sends a /cast/ message to the server identified by 'ServerId'. The server
 -- will not send a response. Like Cloud Haskell's 'send' primitive, cast is
 -- fully asynchronous and /never fails/ - therefore 'cast'ing to a non-existent
 -- (e.g., dead) server process will not generate an error.
+--
 cast :: forall a m . (Addressable a, Serializable m)
                  => a -> m -> Process ()
 cast sid msg = sendTo sid (CastMessage msg)
+
+-- note [rpc calls]
+-- One problem with using plain expect/receive primitives to perform a
+-- synchronous (round trip) call is that a reply matching the expected type
+-- could come from anywhere! The Call.hs module uses a unique integer tag to
+-- distinguish between inputs but this is easy to forge, and forces all callers
+-- to maintain a tag pool, which is quite onerous.
+--
+-- Here, we use a private (internal) tag based on a 'MonitorRef', which is
+-- guaranteed to be unique per calling process (in the absence of mallicious
+-- peers). This is handled throughout the roundtrip, such that the reply will
+-- either contain the CallId (i.e., the ame 'MonitorRef' with which we're
+-- tracking the server process) or we'll see the server die.
+--
+-- Of course, the downside to all this is that the monitoring and receiving
+-- clutters up your mailbox, and if your mailbox is extremely full, could
+-- incur delays in delivery. The callAsync function provides a neat
+-- work-around for that, relying on the insulation provided by Async.
+
+initCall :: forall s a . (Addressable s, Serializable a)
+         => s -> a -> Process CallRef
+initCall sid msg = do
+  (Just pid) <- resolve sid
+  mRef <- monitor pid
+  self <- getSelfPid
+  let cRef = makeRef (Pid self) mRef in do
+    sendTo sid $ CallMessage msg cRef
+    return cRef
+
+waitResponse :: forall b. (Serializable b)
+             => Maybe TimeInterval
+             -> CallRef
+             -> Process (Maybe (Either TerminateReason b))
+waitResponse mTimeout cRef =
+  let (_, mRef) = unCaller cRef in
+    case mTimeout of
+      (Just ti) ->
+        receiveTimeout (asTimeout ti) [
+            matchIf (\((CallResponse _ ref) :: CallResponse b) -> ref == mRef)
+                  (\((CallResponse m _) :: CallResponse b) -> return (Right m))
+          , matchIf (\(ProcessMonitorNotification ref _ _) -> ref == mRef)
+                    (\(ProcessMonitorNotification _ _ r) -> return (Left (err r)))
+          ]
+      Nothing ->
+        receiveWait [
+              matchIf (\((CallResponse _ ref) :: CallResponse b) -> ref == mRef)
+                      (\((CallResponse m _) :: CallResponse b) -> return (Right m))
+            , matchIf (\(ProcessMonitorNotification ref _ _) -> ref == mRef)
+                      (\(ProcessMonitorNotification _ _ r) ->
+                        return (Left (TerminateOther (show r))))
+            ] >>= return . Just
+  where err r = TerminateOther $ show r
+
