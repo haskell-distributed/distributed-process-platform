@@ -192,6 +192,7 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , CallHandler
   , CastHandler
   , UnhandledMessagePolicy(..)
+  , CallRef
   , handleCall
   , handleCallIf
   , handleCallFrom

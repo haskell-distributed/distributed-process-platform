@@ -24,6 +24,9 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
   , MessageMatcher(..)
   , Message(..)
   , CallResponse(..)
+  , CallId
+  , CallRef(..)
+  , makeRef
   ) where
 
 import Control.Distributed.Process hiding (Message)
@@ -46,16 +49,25 @@ import GHC.Generics
 -- API                                                                        --
 --------------------------------------------------------------------------------
 
+type CallId = MonitorRef
+
+newtype CallRef = CallRef { unCaller :: (Recipient, CallId) }
+  deriving (Eq, Show, Typeable, Generic)
+instance Binary CallRef where
+
+makeRef :: Recipient -> CallId -> CallRef
+makeRef r c = CallRef (r, c)
+
 data Message a =
     CastMessage a
-  | CallMessage a Recipient
+  | CallMessage a CallRef
   deriving (Typeable, Generic)
 
 instance Serializable a => Binary (Message a) where
 deriving instance Eq a => Eq (Message a)
 deriving instance Show a => Show (Message a)
 
-data CallResponse a = CallResponse a
+data CallResponse a = CallResponse a CallId
   deriving (Typeable, Generic)
 
 instance Serializable a => Binary (CallResponse a)
@@ -99,8 +111,8 @@ type CastHandler s = s -> Process ()
 -- type and/or value of the input message or both.
 data Condition s m =
     Condition (s -> m -> Bool)  -- ^ predicated on the process state /and/ the message
-  | State     (s -> Bool) -- ^ predicated on the process state only
-  | Input     (m -> Bool) -- ^ predicated on the input message only
+  | State     (s -> Bool)       -- ^ predicated on the process state only
+  | Input     (m -> Bool)       -- ^ predicated on the input message only
 
 -- | An expression used to initialise a process with its state.
 type InitHandler a s = a -> Process (InitResult s)

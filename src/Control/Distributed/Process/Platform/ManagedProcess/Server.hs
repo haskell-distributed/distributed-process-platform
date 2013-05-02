@@ -163,9 +163,11 @@ stop r = return $ ProcessStop r
 stop_ :: TerminateReason -> (s -> Process (ProcessAction s))
 stop_ r _ = stop r
 
--- | Sends a reply explicitly to a 'Recipient'.
-replyTo :: (Serializable m) => Recipient -> m -> Process ()
-replyTo client msg = sendTo client (CallResponse msg)
+-- | Sends a reply explicitly to a 'Caller'.
+replyTo :: (Serializable m) => CallRef -> m -> Process ()
+replyTo callRef msg =
+  let (client, tag) = unCaller callRef
+  in sendTo client (CallResponse msg tag)
 
 --------------------------------------------------------------------------------
 -- Wrapping handler expressions in Dispatcher and DeferredDispatcher          --
@@ -208,8 +210,13 @@ handleCallIf_ cond handler
         -- handling 'reply-to' in the main process loop is awkward at best,
         -- so we handle it here instead and return the 'action' to the loop
         mkCallReply :: (Serializable b)
-                => Recipient -> s -> b -> Process (ProcessAction s)
-        mkCallReply c s m = sendTo c (CallResponse m) >> continue s
+                    => CallRef
+                    -> s
+                    -> b
+                    -> Process (ProcessAction s)
+        mkCallReply c s m =
+          let (c', t) = unCaller c
+          in sendTo c' (CallResponse m t) >> continue s
 
 -- | Constructs a 'call' handler from a function in the 'Process' monad.
 -- > handleCall = handleCallIf (const True)
@@ -243,14 +250,14 @@ handleCallIf cond handler
         doHandle h s (CallMessage p c) = (h s p) >>= mkReply c
         doHandle _ _ _ = die "CALL_HANDLER_TYPE_MISMATCH" -- cannot happen!
 
--- | As 'handleCall' but passes the 'Recipient' to the handler function.
+-- | As 'handleCall' but passes the 'CallRef' to the handler function.
 -- This can be useful if you wish to /reply later/ to the caller by, e.g.,
 -- spawning a process to do some work and have it @replyTo caller response@
--- out of band. In this case the callback can pass the 'Recipient' to the
+-- out of band. In this case the callback can pass the 'CallRef' to the
 -- worker (or stash it away itself) and return 'noReply'.
 --
 handleCallFrom :: forall s a b . (Serializable a, Serializable b)
-           => (s -> Recipient -> a -> Process (ProcessReply s b))
+           => (s -> CallRef -> a -> Process (ProcessReply s b))
            -> Dispatcher s
 handleCallFrom = handleCallFromIf $ state (const True)
 
@@ -259,7 +266,7 @@ handleCallFrom = handleCallFromIf $ state (const True)
 --
 handleCallFromIf :: forall s a b . (Serializable a, Serializable b)
     => Condition s a -- ^ predicate that must be satisfied for the handler to run
-    -> (s -> Recipient -> a -> Process (ProcessReply s b))
+    -> (s -> CallRef -> a -> Process (ProcessReply s b))
         -- ^ a reply yielding function over the process state, sender and input message
     -> Dispatcher s
 handleCallFromIf cond handler
@@ -268,7 +275,7 @@ handleCallFromIf cond handler
     , dispatchIf = checkCall cond
     }
   where doHandle :: (Serializable a, Serializable b)
-                 => (s -> Recipient -> a -> Process (ProcessReply s b))
+                 => (s -> CallRef -> a -> Process (ProcessReply s b))
                  -> s
                  -> Message a
                  -> Process (ProcessAction s)
@@ -320,7 +327,7 @@ handleCastIf_ cond h
     }
 
 -- | Constructs an /action/ handler. Like 'handleDispatch' this can handle both
--- 'cast' and 'call' messages and you won't know which you're dealing with.
+-- 'cast' and 'call' messages, but you won't know which you're dealing with.
 -- This can be useful where certain inputs require a definite action, such as
 -- stopping the server, without concern for the state (e.g., when stopping we
 -- need only decide to stop, as the terminate handler can deal with state
@@ -333,37 +340,39 @@ action :: forall s a . (Serializable a)
           -- ^ a function from the input message to a /stateless action/, cf 'continue_'
     -> Dispatcher s
 action h = handleDispatch perform
-  where perform :: (s -> a -> Process (ProcessAction s))
-        perform s a = let f = h a in f s
+  where perform :: (s -> a -> Maybe CallRef -> Process (ProcessAction s))
+        perform s a _ = let f = h a in f s
 
 -- | Constructs a handler for both /call/ and /cast/ messages.
 -- @handleDispatch = handleDispatchIf (const True)@
 --
 handleDispatch :: (Serializable a)
-               => (s -> a -> Process (ProcessAction s))
+               => (s -> a -> Maybe CallRef -> Process (ProcessAction s))
                -> Dispatcher s
 handleDispatch = handleDispatchIf $ input (const True)
 
 -- | Constructs a handler for both /call/ and /cast/ messages. Messages are only
 -- dispatched to the handler if the supplied condition evaluates to @True@.
+-- Handlers defined in this way have no access to the call context (if one
+-- exists) and cannot therefore reply to calls.
 --
 handleDispatchIf :: forall s a . (Serializable a)
                  => Condition s a
-                 -> (s -> a -> Process (ProcessAction s))
+                 -> (s -> a -> Maybe CallRef -> Process (ProcessAction s))
                  -> Dispatcher s
 handleDispatchIf cond handler = DispatchIf {
       dispatch = doHandle handler
     , dispatchIf = check cond
     }
   where doHandle :: (Serializable a)
-                 => (s -> a -> Process (ProcessAction s))
+                 => (s -> a -> Maybe CallRef -> Process (ProcessAction s))
                  -> s
                  -> Message a
                  -> Process (ProcessAction s)
         doHandle h s msg =
             case msg of
-                (CallMessage p _) -> (h s p)
-                (CastMessage p)   -> (h s p)
+                (CallMessage p c) -> (h s p (Just c))
+                (CastMessage p)   -> (h s p Nothing)
 
 -- | Creates a generic input handler (i.e., for recieved messages that are /not/
 -- sent using the 'cast' or 'call' APIs) from an ordinary function in the
@@ -397,9 +406,13 @@ handleExit h = ExitSignalDispatcher { dispatchExit = doHandleExit h }
 -- handling 'reply-to' in the main process loop is awkward at best,
 -- so we handle it here instead and return the 'action' to the loop
 mkReply :: (Serializable b)
-           => Recipient -> ProcessReply s b -> Process (ProcessAction s)
-mkReply c (ProcessReply r' a) = sendTo c (CallResponse r') >> return a
+        => CallRef
+        -> ProcessReply s b
+        -> Process (ProcessAction s)
 mkReply _ (NoReply a)         = return a
+mkReply c (ProcessReply r' a) =
+  let (c', t) = unCaller c
+  in sendTo c' (CallResponse r' t) >> return a
 
 -- these functions are the inverse of 'condition', 'state' and 'input'
 
@@ -418,7 +431,7 @@ checkCall :: forall s m . (Serializable m)
              -> Message m
              -> Bool
 checkCall cond st msg@(CallMessage _ _) = check cond st msg
-checkCall _    _     _                  = False
+checkCall _    _     _                    = False
 
 checkCast :: forall s m . (Serializable m)
              => Condition s m

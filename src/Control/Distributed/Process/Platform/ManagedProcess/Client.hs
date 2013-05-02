@@ -124,9 +124,10 @@ callAsyncUsing asyncStart sid msg = do
     (Just pid) <- resolve sid
     mRef <- monitor pid
     wpid <- getSelfPid
-    sendTo sid (CallMessage msg (Pid wpid))
+    sendTo sid $ CallMessage msg $ makeRef (Pid wpid) mRef
     r <- receiveWait [
-            match (\((CallResponse m) :: CallResponse b) -> return (Right m))
+            matchIf (\((CallResponse _ ref) :: CallResponse b) -> ref == mRef)
+                    (\((CallResponse m _) :: CallResponse b) -> return (Right m))
           , matchIf (\(ProcessMonitorNotification ref _ _) -> ref == mRef)
               (\(ProcessMonitorNotification _ _ reason) -> return (Left reason))
         ]
