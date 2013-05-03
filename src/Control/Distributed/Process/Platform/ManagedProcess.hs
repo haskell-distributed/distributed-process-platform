@@ -13,7 +13,7 @@
 -- Stability   :  experimental
 -- Portability :  non-portable (requires concurrency)
 --
--- This module provides a high(er) level API for building complex 'Process'
+-- This module provides a high(er) level API for building complex @Process@
 -- implementations by abstracting out the management of the process' mailbox,
 -- reply/response handling, timeouts, process hiberation, error handling
 -- and shutdown/stop procedures. It is modelled along similar lines to OTP's
@@ -21,29 +21,28 @@
 --
 -- [API Overview]
 --
--- Once started, a generic process will consume messages from its mailbox and
+-- Once started, a /managed process/ will consume messages from its mailbox and
 -- pass them on to user defined /handlers/ based on the types received (mapped
 -- to those accepted by the handlers) and optionally by also evaluating user
 -- supplied predicates to determine which handlers are valid.
 -- Each handler returns a 'ProcessAction' which specifies how we should proceed.
 -- If none of the handlers is able to process a message (because their types are
--- incompatible) then the process 'unhandledMessagePolicy' will be applied.
+-- incompatible) then an 'unhandledMessagePolicy' will be applied.
 --
--- The 'ProcessAction' type defines the ways in which a process can respond
+-- The 'ProcessAction' type defines the ways in which a /managed process/ responds
 -- to its inputs, either by continuing to read incoming messages, setting an
 -- optional timeout, sleeping for a while or by stopping. The optional timeout
 -- behaves a little differently to the other process actions. If no messages
--- are received within the specified time span, the process 'timeoutHandler'
+-- are received within the specified time span, a user defined 'timeoutHandler'
 -- will be called in order to determine the next action.
 --
 -- Generic processes are defined by the 'ProcessDefinition' type, using record
 -- syntax. The 'ProcessDefinition' fields contain handlers (or lists of them)
--- for specific tasks. In addtion to the @timeoutHandler@, a 'ProcessDefinition'
--- may also define a @terminateHandler@ which is called just before the process
--- exits. This handler will be called /whenever/ the process is stopping, i.e.,
--- when a callback returns 'stop' as the next action /or/ if an unhandled exit
--- signal or similar asynchronous exception is thrown in (or to) the process
--- itself.
+-- for specific tasks, such as the @timeoutHandler@, and a @terminateHandler@
+-- which is called just before the process exits. This handler will be called
+-- /whenever/ the process is stopping, i.e., when a callback returns 'stop' as
+-- the next action /or/ if an unhandled exit signal or similar asynchronous
+-- exception is thrown in (or to) the process itself.
 --
 -- The other handlers are split into two groups: /apiHandlers/ and /infoHandlers/.
 -- The former contains handlers for the 'cast' and 'call' protocols, whilst the
@@ -54,16 +53,16 @@
 --
 -- [The Cast/Call Protocol]
 --
--- Deliberate interactions with the process will usually fall into one of two
--- categories. A 'cast' interaction involves a client sending a message
+-- Deliberate interactions with a /managed process/ usually fall into one of
+-- two categories. A 'cast' interaction involves a client sending a message
 -- asynchronously and the server handling this input. No reply is sent to
--- the client. On the other hand, a 'call' interaction is a kind of /rpc/
--- where the client sends a message and waits for a reply.
+-- the client. On the other hand, a 'call' is a /remote procedure call/,
+-- where the client sends a message and waits for a reply from the server.
 --
--- The expressions given to @apiHandlers@ have to conform to the /cast|call/
--- protocol. The details of this are, however, hidden from the user. A set
--- of API functions for creating @apiHandlers@ are given instead, which
--- take expressions (i.e., a function or lambda expression) and create the
+-- All expressions given to @apiHandlers@ have to conform to the /cast|call/
+-- protocol. The protocol (messaging) implementation is hidden from the user;
+-- API functions for creating user defined @apiHandlers@ are given instead,
+-- which take expressions (i.e., a function or lambda expression) and create the
 -- appropriate @Dispatcher@ for handling the cast (or call).
 --
 -- The cast/call protocol handlers deal with /expected/ inputs. These form
@@ -72,6 +71,7 @@
 -- example:
 --
 -- @
+-- {- Ask the server to add two numbers -}
 -- add :: ProcessId -> Double -> Double -> Double
 -- add pid x y = call pid (Add x y)
 -- @
@@ -86,7 +86,7 @@
 -- it is desireable to process incoming messages which aren't part of the
 -- protocol, rather than let the policy deal with them. This is particularly
 -- true when incoming messages are important to the process, but their point
--- of origin is outside the developer's control. Handling /signals/ such as
+-- of origin is outside the author's control. Handling /signals/ such as
 -- 'ProcessMonitorNotification' is a typical example of this:
 --
 -- > handleInfo_ (\(ProcessMonitorNotification _ _ r) -> say $ show r >> continue_)
@@ -113,6 +113,17 @@
 --     , timeoutHandler = \\_ _ -> stop $ TerminateOther \"timeout\"
 --   }
 -- @
+--
+-- [Avoiding Side Effects]
+--
+-- If you wish to only write side-effect free code in your server definition,
+-- then there is an explicit API for doing so. Instead of using the handlers
+-- definition functions in this module, import the /pure/ server module instead,
+-- which provides a StateT based monad for building referentially transparent
+-- callbacks.
+--
+-- See "Control.Distributed.Process.Platform.ManagedProcess.Server.Pure" for
+-- details.
 --
 -- [Handling Errors]
 --
@@ -154,7 +165,9 @@
 --
 -- That code is, of course, very silly. Under some circumstances, handling
 -- exit signals is perfectly legitimate. Handling of /other/ forms of
--- asynchronous exception is not supported by this API.
+-- asynchronous exception (e.g., exceptions not generated by an /exit/
+-- signal) is not supported by this API. Cloud Haskell's primitives for
+-- exception handling /will/ work normally in managed process callbacks however.
 --
 -- If any asynchronous exception goes unhandled, the process will immediately
 -- exit without running the @terminateHandler@. It is very important to note

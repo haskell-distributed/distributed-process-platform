@@ -22,17 +22,18 @@ module Control.Distributed.Process.Platform.ManagedProcess.Server
   , reply
   , replyWith
   , noReply
+  , continue
+  , timeoutAfter
+  , hibernate
+  , stop
+  , replyTo
+    -- * Stateless actions
   , noReply_
   , haltNoReply_
-  , continue
   , continue_
-  , timeoutAfter
   , timeoutAfter_
-  , hibernate
   , hibernate_
-  , stop
   , stop_
-  , replyTo
     -- * Server handler/callback creation
   , handleCall
   , handleCallIf
@@ -57,8 +58,7 @@ import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import Control.Distributed.Process.Platform.Internal.Primitives
 import Control.Distributed.Process.Platform.Internal.Types
-  ( Recipient(..)
-  , TerminateReason(..)
+  ( TerminateReason(..)
   )
 import Control.Distributed.Process.Platform.Time
 import Prelude hiding (init)

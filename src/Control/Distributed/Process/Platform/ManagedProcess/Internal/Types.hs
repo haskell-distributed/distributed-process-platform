@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable         #-}
 {-# LANGUAGE ExistentialQuantification  #-}
+{-# LANGUAGE StandaloneDeriving         #-}
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE StandaloneDeriving         #-}
