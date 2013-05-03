@@ -143,22 +143,14 @@ waitResponse :: forall b. (Serializable b)
              -> CallRef
              -> Process (Maybe (Either TerminateReason b))
 waitResponse mTimeout cRef =
-  let (_, mRef) = unCaller cRef in
+  let (_, mRef) = unCaller cRef
+      matchers  = [ matchIf (\((CallResponse _ ref) :: CallResponse b) -> ref == mRef)
+                            (\((CallResponse m _) :: CallResponse b) -> return (Right m))
+                  , matchIf (\(ProcessMonitorNotification ref _ _) -> ref == mRef)
+                      (\(ProcessMonitorNotification _ _ r) -> return (Left (err r)))
+                  ]
+      err r     = TerminateOther $ show r in
     case mTimeout of
-      (Just ti) ->
-        receiveTimeout (asTimeout ti) [
-            matchIf (\((CallResponse _ ref) :: CallResponse b) -> ref == mRef)
-                  (\((CallResponse m _) :: CallResponse b) -> return (Right m))
-          , matchIf (\(ProcessMonitorNotification ref _ _) -> ref == mRef)
-                    (\(ProcessMonitorNotification _ _ r) -> return (Left (err r)))
-          ]
-      Nothing ->
-        receiveWait [
-              matchIf (\((CallResponse _ ref) :: CallResponse b) -> ref == mRef)
-                      (\((CallResponse m _) :: CallResponse b) -> return (Right m))
-            , matchIf (\(ProcessMonitorNotification ref _ _) -> ref == mRef)
-                      (\(ProcessMonitorNotification _ _ r) ->
-                        return (Left (TerminateOther (show r))))
-            ] >>= return . Just
-  where err r = TerminateOther $ show r
+      (Just ti) -> receiveTimeout (asTimeout ti) matchers
+      Nothing   -> receiveWait matchers >>= return . Just
 

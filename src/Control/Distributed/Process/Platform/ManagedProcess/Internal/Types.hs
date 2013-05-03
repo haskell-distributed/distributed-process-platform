@@ -79,8 +79,8 @@ deriving instance Show a => Show (CallResponse a)
 data InitResult s =
     InitOk s Delay {-
         ^ denotes successful initialisation, initial state and timeout -}
-  | forall r. (Serializable r)
-    => InitFail r -- ^ denotes failed initialisation and the reason
+  | InitFail String -- ^ denotes failed initialisation and the reason
+  deriving (Typeable)
 
 -- | The action taken by a process after a handler has run and its updated state.
 -- See 'continue'
@@ -97,8 +97,8 @@ data ProcessAction s =
 -- | Returned from handlers for the synchronous 'call' protocol, encapsulates
 -- the reply data /and/ the action to take after sending the reply. A handler
 -- can return @NoReply@ if they wish to ignore the call.
-data ProcessReply s a =
-    ProcessReply a (ProcessAction s)
+data ProcessReply r s =
+    ProcessReply r (ProcessAction s)
   | NoReply (ProcessAction s)
 
 type CallHandler a s = s -> a -> Process (ProcessReply s a)

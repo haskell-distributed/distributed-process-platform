@@ -19,6 +19,9 @@
 -- and shutdown/stop procedures. It is modelled along similar lines to OTP's
 -- gen_server API - <http://www.erlang.org/doc/man/gen_server.html>.
 --
+-- In particular, a /managed process/ will interoperate cleanly with the
+-- "Control.Distributed.Process.Platform.Supervisor" API.
+--
 -- [API Overview]
 --
 -- Once started, a /managed process/ will consume messages from its mailbox and
@@ -67,7 +70,8 @@
 --
 -- The cast/call protocol handlers deal with /expected/ inputs. These form
 -- the explicit public API for the process, and will usually be exposed by
--- providing module level functions that defer to the cast/call API. For
+-- providing module level functions that defer to the cast/call API, giving
+-- the author an opportunity to enforce the correct types. For
 -- example:
 --
 -- @
@@ -76,7 +80,17 @@
 -- add pid x y = call pid (Add x y)
 -- @
 --
--- [Handling Info Messages]
+-- Note here that the return type from the call is /inferred/ and will not be
+-- enforced by the type system. If the server sends a different type back in
+-- the reply, then the caller will be blocked indefinitely! This is a slight
+-- disadvantage of the loose coupling between client and server, but it does
+-- allow servers to handle a variety of messages without specifying the entire
+-- protocol to be supported in excruciating detail. If the latter approach
+-- appeals, then the "Control.Distributed.Process.Platform.Session" API might
+-- be more to your tastes. Note that /that/ API cannot handle unanticipated
+-- messages, in the same way that managed processes can.
+--
+-- [Handling Unexpected/Info Messages]
 --
 -- An explicit protocol for communicating with the process can be
 -- configured using 'cast' and 'call', but it is not possible to prevent
@@ -122,8 +136,8 @@
 -- which provides a StateT based monad for building referentially transparent
 -- callbacks.
 --
--- See "Control.Distributed.Process.Platform.ManagedProcess.Server.Restricted" for
--- details.
+-- See "Control.Distributed.Process.Platform.ManagedProcess.Server.Pure" for
+-- details and API documentation.
 --
 -- [Handling Errors]
 --
@@ -145,10 +159,10 @@
 -- The caveats mentioned in "Control.Distributed.Process.Platform" about
 -- exit signal handling obviously apply here as well.
 --
--- [Structured Exit Signal Handling]
+-- [Structured Exit Handling]
 --
 -- Because "Control.Distributed.Process.ProcessExitException" is a ubiquitous
--- /signalling mechanism/ in Cloud Haskell, it is treated unlike other
+-- signalling mechanism in Cloud Haskell, it is treated unlike other
 -- asynchronous exceptions. The 'ProcessDefinition' 'exitHandlers' field
 -- accepts a list of handlers that, for a specific exit reason, can decide
 -- how the process should respond. If none of these handlers matches the

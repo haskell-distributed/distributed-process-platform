@@ -257,7 +257,7 @@ wrapCall :: forall s a b . (Serializable a, Serializable b)
             => (a -> RestrictedProcess s (Result b))
             -> s
             -> a
-            -> Process (ProcessReply s b)
+            -> Process (ProcessReply b s)
 wrapCall h s a = do
   (r, s') <- runRestricted s (h a)
   case r of
