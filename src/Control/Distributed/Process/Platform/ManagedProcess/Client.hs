@@ -35,7 +35,6 @@ import Control.Distributed.Process.Platform.Internal.Types
   , TerminateReason(..)
   , Shutdown(..)
   )
-import Control.Distributed.Process.Platform.Internal.Common
 import Control.Distributed.Process.Platform.Time
 import Data.Maybe (fromJust)
 
@@ -60,6 +59,7 @@ call :: forall s a b . (Addressable s, Serializable a, Serializable b)
 call sid msg = initCall sid msg >>= waitResponse Nothing >>= decodeResult
   where decodeResult (Just (Right r))  = return r
         decodeResult (Just (Left err)) = die err
+        decodeResult Nothing {- the impossible happened -} = terminate
 
 -- | Safe version of 'call' that returns information about the error
 -- if the operation fails. If an error occurs then the explanation will be
@@ -89,9 +89,9 @@ callTimeout s m d = initCall s m >>= waitResponse (Just d) >>= decodeResult
   where decodeResult :: (Serializable b)
                => Maybe (Either TerminateReason b)
                -> Process (Maybe b)
-        decodeResult Nothing          = return Nothing
-        decodeResult (Just (Right m)) = return $ Just m
-        decodeResult (Just (Left r))  = die r
+        decodeResult Nothing               = return Nothing
+        decodeResult (Just (Right result)) = return $ Just result
+        decodeResult (Just (Left reason))  = die reason
 
 -- | Invokes 'call' /out of band/, and returns an "async handle."
 --
@@ -108,7 +108,7 @@ callAsync server msg = async $ call server msg
 --
 cast :: forall a m . (Addressable a, Serializable m)
                  => a -> m -> Process ()
-cast sid msg = sendTo sid (CastMessage msg)
+cast server msg = sendTo server (CastMessage msg)
 
 -- note [rpc calls]
 -- One problem with using plain expect/receive primitives to perform a
