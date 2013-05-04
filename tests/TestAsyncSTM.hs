@@ -4,11 +4,13 @@
 
 module TestAsyncSTM where
 
+import Control.Applicative
 import Control.Concurrent.MVar
 import Control.Distributed.Process
+import Control.Distributed.Process.Closure
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
-import Control.Distributed.Process.Platform.Async (task)
+import Control.Distributed.Process.Platform.Async (task,remoteTask)
 import Control.Distributed.Process.Platform.Async.AsyncSTM
 import Control.Distributed.Process.Platform.Test
 import Control.Distributed.Process.Platform.Time
@@ -164,6 +166,23 @@ testAsyncCancelWith result = do
   AsyncFailed (DiedException _) <- wait p1
   stash result True
 
+remotableDecl [
+    [d| fib :: (NodeId,Int) -> Process Integer ;
+        fib (_,0) = return 0
+        fib (_,1) = return 1
+        fib (myNode,n) = do
+          let tsk = remoteTask ($(functionTDict 'fib)) myNode ($(mkClosure 'fib) (myNode,n-2))
+          future <- async tsk
+          y <- fib (myNode,n-1)
+          (AsyncDone z) <- wait future
+          return $ y + z
+      |]
+  ]
+testAsyncRecursive :: TestResult Integer -> Process ()
+testAsyncRecursive result = do
+    myNode <- processNodeId <$> getSelfPid
+    fib (myNode,6) >>= stash result
+
 tests :: LocalNode  -> [Test]
 tests localNode = [
     testGroup "Handling async results with STM" [
@@ -213,11 +232,15 @@ tests localNode = [
             (delayedAssertion
              "expected the worker to have been killed with the given signal"
              localNode True testAsyncCancelWith)
+        , testCase "testAsyncRecursive"
+            (delayedAssertion
+             "expected Fibonacci 6 to be evaluated, and value of 8 returned"
+             localNode 8 testAsyncRecursive)
       ]
   ]
 
 asyncStmTests :: NT.Transport -> IO [Test]
 asyncStmTests transport = do
-  localNode <- newLocalNode transport initRemoteTable
+  localNode <- newLocalNode transport $ __remoteTableDecl initRemoteTable
   let testData = tests localNode
   return testData
