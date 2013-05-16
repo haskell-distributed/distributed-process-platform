@@ -63,7 +63,7 @@ import Control.Applicative (Applicative)
 import Control.Distributed.Process hiding (call, say)
 import qualified Control.Distributed.Process as P (say)
 import Control.Distributed.Process.Platform.Internal.Types
-  (TerminateReason(..))
+  (ExitReason(..))
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import qualified Control.Distributed.Process.Platform.ManagedProcess.Server as Server
 import Control.Distributed.Process.Platform.Time
@@ -94,18 +94,18 @@ newtype RestrictedProcess s a = RestrictedProcess {
 
 -- | The result of a 'call' handler's execution.
 data Result a =
-    Reply     a                -- ^ reply with the given term
-  | Timeout   TimeInterval a   -- ^ reply with the given term and enter timeout
-  | Hibernate TimeInterval a   -- ^ reply with the given term and hibernate
-  | Stop      TerminateReason  -- ^ stop the process with the given reason
+    Reply     a              -- ^ reply with the given term
+  | Timeout   TimeInterval a -- ^ reply with the given term and enter timeout
+  | Hibernate TimeInterval a -- ^ reply with the given term and hibernate
+  | Stop      ExitReason     -- ^ stop the process with the given reason
   deriving (Typeable)
 
 -- | The result of a safe 'cast' handler's execution.
 data SafeAction =
-    SafeContinue                  -- ^ continue executing
-  | SafeTimeout   TimeInterval    -- ^ timeout if no messages are received
-  | SafeHibernate TimeInterval    -- ^ hibernate (i.e., sleep)
-  | SafeStop      TerminateReason -- ^ stop/terminate the server process
+    SafeContinue               -- ^ continue executing
+  | SafeTimeout   TimeInterval -- ^ timeout if no messages are received
+  | SafeHibernate TimeInterval -- ^ hibernate (i.e., sleep)
+  | SafeStop      ExitReason   -- ^ stop/terminate the server process
 
 --------------------------------------------------------------------------------
 -- Handling state in RestrictedProcess execution environments                 --
@@ -145,7 +145,7 @@ noReply r = return r
 -- | Halt process execution during a call handler, without paying any attention
 -- to the expected return type.
 haltNoReply :: forall s r . (Serializable r)
-           => TerminateReason
+           => ExitReason
            -> RestrictedProcess s (Result r)
 haltNoReply r = noReply (Stop r)
 
@@ -168,9 +168,9 @@ hibernate :: forall s. TimeInterval -> RestrictedProcess s SafeAction
 hibernate d = return $ SafeHibernate d
 
 -- | Instructs the process to terminate, giving the supplied reason. If a valid
--- 'terminateHandler' is installed, it will be called with the 'TerminateReason'
+-- 'terminateHandler' is installed, it will be called with the 'ExitReason'
 -- returned from this call, along with the process state.
-stop :: forall s. TerminateReason -> RestrictedProcess s SafeAction
+stop :: forall s. ExitReason -> RestrictedProcess s SafeAction
 stop r = return $ SafeStop r
 
 --------------------------------------------------------------------------------

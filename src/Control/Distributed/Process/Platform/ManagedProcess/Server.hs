@@ -58,7 +58,7 @@ import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import Control.Distributed.Process.Platform.Internal.Primitives
 import Control.Distributed.Process.Platform.Internal.Types
-  ( TerminateReason(..)
+  ( ExitReason(..)
   )
 import Control.Distributed.Process.Platform.Time
 import Prelude hiding (init)
@@ -110,7 +110,7 @@ noReply_ s = continue s >>= noReply
 
 -- | Halt process execution during a call handler, without paying any attention
 -- to the expected return type.
-haltNoReply_ :: TerminateReason -> Process (ProcessReply TerminateReason s)
+haltNoReply_ :: ExitReason -> Process (ProcessReply ExitReason s)
 haltNoReply_ r = stop r >>= noReply
 
 -- | Instructs the process to continue running and receiving messages.
@@ -151,16 +151,16 @@ hibernate_ :: TimeInterval -> (s -> Process (ProcessAction s))
 hibernate_ d = return . ProcessHibernate d
 
 -- | Instructs the process to terminate, giving the supplied reason. If a valid
--- 'terminateHandler' is installed, it will be called with the 'TerminateReason'
+-- 'terminateHandler' is installed, it will be called with the 'ExitReason'
 -- returned from this call, along with the process state.
-stop :: TerminateReason -> Process (ProcessAction s)
+stop :: ExitReason -> Process (ProcessAction s)
 stop r = return $ ProcessStop r
 
 -- | Version of 'stop' that can be used in handlers that ignore process state.
 --
--- > action (\ClientError -> stop_ TerminateNormal)
+-- > action (\ClientError -> stop_ ExitNormal)
 --
-stop_ :: TerminateReason -> (s -> Process (ProcessAction s))
+stop_ :: ExitReason -> (s -> Process (ProcessAction s))
 stop_ r _ = stop r
 
 -- | Sends a reply explicitly to a 'Caller'.
@@ -333,7 +333,7 @@ handleCastIf_ cond h
 -- need only decide to stop, as the terminate handler can deal with state
 -- cleanup etc). For example:
 --
--- @action (\MyCriticalErrorSignal -> stop_ TerminateNormal)@
+-- @action (\MyCriticalSignal -> stop_ ExitNormal)@
 --
 action :: forall s a . (Serializable a)
     => (a -> (s -> Process (ProcessAction s)))

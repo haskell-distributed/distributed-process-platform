@@ -11,7 +11,7 @@ import qualified Control.Distributed.Process as P (Message)
 import Control.Distributed.Process.Platform.ManagedProcess.Server
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import Control.Distributed.Process.Platform.Internal.Types
-  ( TerminateReason(..)
+  ( ExitReason(..)
   , Shutdown(..)
   )
 import Control.Distributed.Process.Platform.Time
@@ -21,14 +21,14 @@ import Prelude hiding (init)
 -- Internal Process Implementation                                            --
 --------------------------------------------------------------------------------
 
-recvLoop :: ProcessDefinition s -> s -> Delay -> Process TerminateReason
+recvLoop :: ProcessDefinition s -> s -> Delay -> Process ExitReason
 recvLoop pDef pState recvDelay =
   let p             = unhandledMessagePolicy pDef
       handleTimeout = timeoutHandler pDef
-      handleStop    = terminateHandler pDef
-      shutdown'     = matchDispatch p pState shutdownHandler
+      handleStop    = shutdownHandler pDef
+      shutdown'     = matchDispatch p pState shutdownHandler'
       matchers      = map (matchDispatch p pState) (apiHandlers pDef)
-      ex'           = (exitHandlers pDef) ++ [trapExit]
+      ex'           = (trapExit:(exitHandlers pDef))
       ms' = (shutdown':matchers) ++ matchAux p pState (infoHandlers pDef)
   in do
     ac <- catchesExit (processReceive ms' handleTimeout pState recvDelay)
@@ -37,15 +37,15 @@ recvLoop pDef pState recvDelay =
         (ProcessContinue s')     -> recvLoop pDef s' recvDelay
         (ProcessTimeout t' s')   -> recvLoop pDef s' (Delay t')
         (ProcessHibernate d' s') -> block d' >> recvLoop pDef s' recvDelay
-        (ProcessStop r) -> handleStop pState r >> return (r :: TerminateReason)
+        (ProcessStop r) -> handleStop pState r >> return (r :: ExitReason)
 
 -- an explicit 'cast' giving 'Shutdown' will stop the server gracefully
-shutdownHandler :: Dispatcher s
-shutdownHandler = handleCast (\_ Shutdown -> stop $ TerminateShutdown)
+shutdownHandler' :: Dispatcher s
+shutdownHandler' = handleCast (\_ Shutdown -> stop $ ExitNormal)
 
 -- @(ProcessExitException from Shutdown)@ will stop the server gracefully
 trapExit :: ExitSignalDispatcher s
-trapExit = handleExit (\_ (_ :: ProcessId) Shutdown -> stop $ TerminateShutdown)
+trapExit = handleExit (\_ _ (reason :: ExitReason) -> stop reason)
 
 block :: TimeInterval -> Process ()
 block i = liftIO $ threadDelay (asTimeout i)
@@ -56,7 +56,7 @@ applyPolicy :: UnhandledMessagePolicy
             -> Process (ProcessAction s)
 applyPolicy p s m =
   case p of
-    Terminate      -> stop $ TerminateOther "UnhandledInput"
+    Terminate      -> stop $ ExitOther "UnhandledInput"
     DeadLetter pid -> forward m pid >> continue s
     Drop           -> continue s
 
