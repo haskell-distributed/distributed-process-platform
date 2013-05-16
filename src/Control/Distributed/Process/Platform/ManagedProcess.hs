@@ -122,7 +122,7 @@
 -- which provides a StateT based monad for building referentially transparent
 -- callbacks.
 --
--- See "Control.Distributed.Process.Platform.ManagedProcess.Server.Pure" for
+-- See "Control.Distributed.Process.Platform.ManagedProcess.Server.Restricted" for
 -- details.
 --
 -- [Handling Errors]

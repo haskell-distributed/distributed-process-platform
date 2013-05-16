@@ -5,7 +5,7 @@
 
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Control.Distributed.Process.Platform.ManagedProcess.Server.Pure
+-- Module      :  Control.Distributed.Process.Platform.ManagedProcess.Server.Restricted
 -- Copyright   :  (c) Tim Watson 2012 - 2013
 -- License     :  BSD3 (see the file LICENSE)
 --
@@ -30,7 +30,7 @@
 --
 -----------------------------------------------------------------------------
 
-module Control.Distributed.Process.Platform.ManagedProcess.Server.Pure
+module Control.Distributed.Process.Platform.ManagedProcess.Server.Restricted
   ( -- * Exported Types
     RestrictedProcess
   , Result(..)
