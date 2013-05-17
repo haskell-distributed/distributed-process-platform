@@ -215,6 +215,8 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , handleInfo
   , handleDispatch
   , handleExit
+    -- * Prioritised mailboxes
+  , module Control.Distributed.Process.Platform.ManagedProcess.Server.Priority
     -- * Stateless handlers
   , action
   , handleCall_

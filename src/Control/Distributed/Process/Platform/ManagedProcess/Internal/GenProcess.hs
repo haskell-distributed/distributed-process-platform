@@ -1,5 +1,6 @@
 {-# LANGUAGE ExistentialQuantification  #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE ViewPatterns               #-}
 
 -- | This is the @Process@ implementation of a /managed process/ server
 module Control.Distributed.Process.Platform.ManagedProcess.Internal.GenProcess

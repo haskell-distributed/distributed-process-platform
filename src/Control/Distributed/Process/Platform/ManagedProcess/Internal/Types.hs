@@ -19,6 +19,8 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
   , TimeoutHandler
   , UnhandledMessagePolicy(..)
   , ProcessDefinition(..)
+  , Priority(..)
+  , PrioritisedProcessDefinition(..)
   , Dispatcher(..)
   , DeferredDispatcher(..)
   , ExitSignalDispatcher(..)
@@ -157,6 +159,17 @@ class MessageMatcher d where
 instance MessageMatcher Dispatcher where
   matchDispatch _ s (Dispatch   d)      = match (d s)
   matchDispatch _ s (DispatchIf d cond) = matchIf (cond s) (d s)
+
+data Priority s =
+    PrioritiseCall { prioritise :: s -> P.Message -> Process (Maybe Int) }
+  | PrioritiseCast { prioritise :: s -> P.Message -> Process (Maybe Int) }
+  | PrioritiseInfo { prioritise :: s -> P.Message -> Process (Maybe Int) }
+
+data PrioritisedProcessDefinition s =
+    PrioritisedProcessDefinition {
+        processDef :: ProcessDefinition s
+      , priorities :: [Priority s]
+      }
 
 -- | Policy for handling unexpected messages, i.e., messages which are not
 -- sent using the 'call' or 'cast' APIs, and which are not handled by any of the
