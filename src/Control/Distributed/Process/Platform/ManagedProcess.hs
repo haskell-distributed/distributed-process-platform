@@ -198,10 +198,13 @@ module Control.Distributed.Process.Platform.ManagedProcess
     InitResult(..)
   , InitHandler
   , serve
+  , pserve
   , runProcess
+  , prioritised
     -- * Client interactions
   , shutdown
   , defaultProcess
+  , defaultProcessWithPriorities
   , statelessProcess
   , statelessInit
   , call
@@ -212,6 +215,8 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , cast
     -- * Defining server processes
   , ProcessDefinition(..)
+  , PrioritisedProcessDefinition(..)
+  , Priority(..)
   , ShutdownHandler
   , TimeoutHandler
   , ProcessAction(..)
@@ -260,6 +265,7 @@ module Control.Distributed.Process.Platform.ManagedProcess
 import Control.Distributed.Process hiding (call)
 import Control.Distributed.Process.Platform.ManagedProcess.Client
 import Control.Distributed.Process.Platform.ManagedProcess.Server
+import Control.Distributed.Process.Platform.ManagedProcess.Server.Priority
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.GenProcess
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import Control.Distributed.Process.Platform.Internal.Types (ExitReason(..))
@@ -274,17 +280,22 @@ serve :: a
       -> InitHandler a s
       -> ProcessDefinition s
       -> Process ()
-serve = runProcess recvLoop
+serve argv init def = runProcess (recvLoop def) argv init
 
-runProcess :: (ProcessDefinition s -> s -> Delay -> Process ExitReason)
+pserve :: a
+       -> InitHandler a s
+       -> PrioritisedProcessDefinition s
+       -> Process ()
+pserve argv init def = runProcess (precvLoop def) argv init
+
+runProcess :: (s -> Delay -> Process ExitReason)
            -> a
            -> InitHandler a s
-           -> ProcessDefinition s
            -> Process ()
-runProcess loop args init def = do
+runProcess loop args init = do
   ir <- init args
   case ir of
-    InitOk s d -> loop def s d >>= checkExitType
+    InitOk s d -> loop s d >>= checkExitType
     InitStop s -> die $ ExitOther s
     InitIgnore -> return ()
   where
@@ -302,18 +313,19 @@ defaultProcess = ProcessDefinition {
   , unhandledMessagePolicy = Terminate
   } :: ProcessDefinition s
 
+prioritised :: ProcessDefinition s
+            -> [Priority s]
+            -> PrioritisedProcessDefinition s
+prioritised def ps = PrioritisedProcessDefinition def ps
+
+defaultProcessWithPriorities :: [Priority s] -> PrioritisedProcessDefinition s
+defaultProcessWithPriorities = PrioritisedProcessDefinition defaultProcess
+
 -- | A basic, stateless process definition, where the unhandled message policy
 -- is set to 'Terminate', the default timeout handlers does nothing (i.e., the
 -- same as calling @continue ()@ and the terminate handler is a no-op.
 statelessProcess :: ProcessDefinition ()
-statelessProcess = ProcessDefinition {
-    apiHandlers            = []
-  , infoHandlers           = []
-  , exitHandlers           = []
-  , timeoutHandler         = \s _ -> continue s
-  , shutdownHandler        = \_ _ -> return ()
-  , unhandledMessagePolicy = Terminate
-  }
+statelessProcess = defaultProcess :: ProcessDefinition ()
 
 -- | A basic, state /unaware/ 'InitHandler' that can be used with
 -- 'statelessProcess'.

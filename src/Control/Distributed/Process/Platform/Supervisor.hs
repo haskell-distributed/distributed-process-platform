@@ -54,7 +54,10 @@ import Control.Distributed.Process.Platform.ManagedProcess
   , ProcessDefinition(..)
   , UnhandledMessagePolicy(Drop)
   )
-import qualified Control.Distributed.Process.Platform.ManagedProcess as MP (serve)
+import qualified Control.Distributed.Process.Platform.ManagedProcess as MP
+  ( serve
+  , cast
+  )
 import Control.Distributed.Process.Platform.ManagedProcess.Server.Restricted
   ( RestrictedProcess
   , Result
@@ -69,7 +72,7 @@ import qualified Control.Distributed.Process.Platform.ManagedProcess.Server.Rest
 -- import Control.Distributed.Process.Platform.ManagedProcess.Server.Unsafe
 -- import Control.Distributed.Process.Platform.ManagedProcess.Server
 import Control.Distributed.Process.Platform.Time
-import Control.Exception (SomeException)
+import Control.Exception (SomeException, Exception, throwIO)
 
 import Control.Monad.Error
 
@@ -223,7 +226,8 @@ instance Binary ChildSpec where
 data ChildInitFailure =
     ChildInitFailure !String
   | ChildInitIgnore
-  deriving (Typeable, Exception, Show)
+  deriving (Typeable, Generic, Show)
+instance Exception ChildInitFailure where
 
 data SupervisorStats = SupervisorStats {
     _children          :: Int
@@ -521,8 +525,8 @@ tryStartChild spec =
                            -> Process ()
         filterInitFailures sup pid ex = do
           case ex of
-            ChildInitFailed _ -> liftIO $ throwIO ex
-            ChildInitIgnore   -> cast sup $ IgnoreChildReq pid
+            ChildInitFailure _ -> liftIO $ throwIO ex
+            ChildInitIgnore    -> MP.cast sup $ IgnoreChildReq pid
 
 -- managing internal state
 
