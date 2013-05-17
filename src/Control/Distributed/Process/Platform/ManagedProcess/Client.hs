@@ -32,7 +32,7 @@ import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import Control.Distributed.Process.Platform.Internal.Primitives
 import Control.Distributed.Process.Platform.Internal.Types
   ( Recipient(..)
-  , TerminateReason(..)
+  , ExitReason(..)
   , Shutdown(..)
   )
 import Control.Distributed.Process.Platform.Time
@@ -53,7 +53,7 @@ shutdown :: ProcessId -> Process ()
 shutdown pid = cast pid Shutdown
 
 -- | Make a synchronous call - will block until a reply is received.
--- The calling process will exit with 'TerminateReason' if the calls fails.
+-- The calling process will exit with 'ExitReason' if the calls fails.
 call :: forall s a b . (Addressable s, Serializable a, Serializable b)
                  => s -> a -> Process b
 call sid msg = initCall sid msg >>= waitResponse Nothing >>= decodeResult
@@ -63,9 +63,9 @@ call sid msg = initCall sid msg >>= waitResponse Nothing >>= decodeResult
 
 -- | Safe version of 'call' that returns information about the error
 -- if the operation fails. If an error occurs then the explanation will be
--- will be stashed away as @(TerminateOther String)@.
+-- will be stashed away as @(ExitOther String)@.
 safeCall :: forall s a b . (Addressable s, Serializable a, Serializable b)
-                 => s -> a -> Process (Either TerminateReason b)
+                 => s -> a -> Process (Either ExitReason b)
 safeCall s m = initCall s m >>= waitResponse Nothing >>= return . fromJust
 
 -- | Version of 'safeCall' that returns 'Nothing' if the operation fails. If
@@ -81,13 +81,13 @@ tryCall s m = initCall s m >>= waitResponse Nothing >>= decodeResult
 -- is not received within the specified time interval.
 --
 -- If the result of the call is a failure (or the call was cancelled) then
--- the calling process will exit, with the 'TerminateReason' given as the reason.
+-- the calling process will exit, with the 'ExitReason' given as the reason.
 --
 callTimeout :: forall s a b . (Addressable s, Serializable a, Serializable b)
                  => s -> a -> TimeInterval -> Process (Maybe b)
 callTimeout s m d = initCall s m >>= waitResponse (Just d) >>= decodeResult
   where decodeResult :: (Serializable b)
-               => Maybe (Either TerminateReason b)
+               => Maybe (Either ExitReason b)
                -> Process (Maybe b)
         decodeResult Nothing               = return Nothing
         decodeResult (Just (Right result)) = return $ Just result
@@ -141,24 +141,16 @@ initCall sid msg = do
 waitResponse :: forall b. (Serializable b)
              => Maybe TimeInterval
              -> CallRef
-             -> Process (Maybe (Either TerminateReason b))
+             -> Process (Maybe (Either ExitReason b))
 waitResponse mTimeout cRef =
-  let (_, mRef) = unCaller cRef in
+  let (_, mRef) = unCaller cRef
+      matchers  = [ matchIf (\((CallResponse _ ref) :: CallResponse b) -> ref == mRef)
+                            (\((CallResponse m _) :: CallResponse b) -> return (Right m))
+                  , matchIf (\(ProcessMonitorNotification ref _ _) -> ref == mRef)
+                      (\(ProcessMonitorNotification _ _ r) -> return (Left (err r)))
+                  ]
+      err r     = ExitOther $ show r in
     case mTimeout of
-      (Just ti) ->
-        receiveTimeout (asTimeout ti) [
-            matchIf (\((CallResponse _ ref) :: CallResponse b) -> ref == mRef)
-                  (\((CallResponse m _) :: CallResponse b) -> return (Right m))
-          , matchIf (\(ProcessMonitorNotification ref _ _) -> ref == mRef)
-                    (\(ProcessMonitorNotification _ _ r) -> return (Left (err r)))
-          ]
-      Nothing ->
-        receiveWait [
-              matchIf (\((CallResponse _ ref) :: CallResponse b) -> ref == mRef)
-                      (\((CallResponse m _) :: CallResponse b) -> return (Right m))
-            , matchIf (\(ProcessMonitorNotification ref _ _) -> ref == mRef)
-                      (\(ProcessMonitorNotification _ _ r) ->
-                        return (Left (TerminateOther (show r))))
-            ] >>= return . Just
-  where err r = TerminateOther $ show r
+      (Just ti) -> receiveTimeout (asTimeout ti) matchers
+      Nothing   -> receiveWait matchers >>= return . Just
 

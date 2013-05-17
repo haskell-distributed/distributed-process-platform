@@ -15,7 +15,7 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
   , CallHandler
   , CastHandler
   , InitHandler
-  , TerminateHandler
+  , ShutdownHandler
   , TimeoutHandler
   , UnhandledMessagePolicy(..)
   , ProcessDefinition(..)
@@ -37,7 +37,7 @@ import qualified Control.Distributed.Process as P (Message)
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Internal.Types
   ( Recipient(..)
-  , TerminateReason(..)
+  , ExitReason(..)
   )
 import Control.Distributed.Process.Platform.Time
 
@@ -80,9 +80,12 @@ deriving instance Show a => Show (CallResponse a)
 -- | Return type for and 'InitHandler' expression.
 data InitResult s =
     InitOk s Delay {-
-        ^ denotes successful initialisation, initial state and timeout -}
-  | forall r. (Serializable r)
-    => InitFail r -- ^ denotes failed initialisation and the reason
+        ^ a successful initialisation, initial state and timeout -}
+  | InitStop String {-
+        ^ failed initialisation and the reason, this will result in an error -}
+  | InitIgnore {-
+        ^ the process has decided not to continue starting - this is not an error -}
+  deriving (Typeable)
 
 -- | The action taken by a process after a handler has run and its updated state.
 -- See 'continue'
@@ -91,23 +94,21 @@ data InitResult s =
 --     'stop'
 --
 data ProcessAction s =
-    ProcessContinue  s                -- ^ continue with (possibly new) state
-  | ProcessTimeout   TimeInterval s   -- ^ timeout if no messages are received
-  | ProcessHibernate TimeInterval s   -- ^ hibernate for /delay/
-  | ProcessStop      TerminateReason  -- ^ stop the process, giving @TerminateReason@
+    ProcessContinue  s              -- ^ continue with (possibly new) state
+  | ProcessTimeout   TimeInterval s -- ^ timeout if no messages are received
+  | ProcessHibernate TimeInterval s -- ^ hibernate for /delay/
+  | ProcessStop      ExitReason     -- ^ stop the process, giving @ExitReason@
 
 -- | Returned from handlers for the synchronous 'call' protocol, encapsulates
 -- the reply data /and/ the action to take after sending the reply. A handler
 -- can return @NoReply@ if they wish to ignore the call.
-data ProcessReply s a =
-    ProcessReply a (ProcessAction s)
+data ProcessReply r s =
+    ProcessReply r (ProcessAction s)
   | NoReply (ProcessAction s)
 
 type CallHandler a s = s -> a -> Process (ProcessReply s a)
 
 type CastHandler s = s -> Process ()
-
--- type InfoHandler a = forall a b. (Serializable a, Serializable b) => a -> Process b
 
 -- | Wraps a predicate that is used to determine whether or not a handler
 -- is valid based on some combination of the current process state, the
@@ -121,7 +122,7 @@ data Condition s m =
 type InitHandler a s = a -> Process (InitResult s)
 
 -- | An expression used to handle process termination.
-type TerminateHandler s = s -> TerminateReason -> Process ()
+type ShutdownHandler s = s -> ExitReason -> Process ()
 
 -- | An expression used to handle process timeouts.
 type TimeoutHandler s = s -> Delay -> Process (ProcessAction s)
@@ -175,7 +176,7 @@ data PrioritisedProcessDefinition s =
 -- sent using the 'call' or 'cast' APIs, and which are not handled by any of the
 -- 'handleInfo' handlers.
 data UnhandledMessagePolicy =
-    Terminate  -- ^ stop immediately, giving @TerminateOther "UnhandledInput"@ as the reason
+    Terminate  -- ^ stop immediately, giving @ExitOther "UnhandledInput"@ as the reason
   | DeadLetter ProcessId -- ^ forward the message to the given recipient
   | Drop                 -- ^ dequeue and then drop/ignore the message
 
@@ -186,7 +187,7 @@ data ProcessDefinition s = ProcessDefinition {
   , infoHandlers :: [DeferredDispatcher s] -- ^ functions that handle non call/cast messages
   , exitHandlers :: [ExitSignalDispatcher s] -- ^ functions that handle exit signals
   , timeoutHandler :: TimeoutHandler s   -- ^ a function that handles timeouts
-  , terminateHandler :: TerminateHandler s -- ^ a function that is run just before the process exits
+  , shutdownHandler :: ShutdownHandler s -- ^ a function that is run just before the process exits
   , unhandledMessagePolicy :: UnhandledMessagePolicy -- ^ how to deal with unhandled messages
   }
 

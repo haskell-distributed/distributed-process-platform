@@ -58,7 +58,7 @@ import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import Control.Distributed.Process.Platform.Internal.Primitives
 import Control.Distributed.Process.Platform.Internal.Types
-  ( TerminateReason(..)
+  ( ExitReason(..)
   )
 import Control.Distributed.Process.Platform.Time
 import Prelude hiding (init)
@@ -89,28 +89,28 @@ input :: forall s m. (Serializable m) => (m -> Bool) -> Condition s m
 input = Input
 
 -- | Instructs the process to send a reply and continue running.
-reply :: (Serializable r) => r -> s -> Process (ProcessReply s r)
+reply :: (Serializable r) => r -> s -> Process (ProcessReply r s)
 reply r s = continue s >>= replyWith r
 
 -- | Instructs the process to send a reply /and/ evaluate the 'ProcessAction'.
-replyWith :: (Serializable m)
-          => m
+replyWith :: (Serializable r)
+          => r
           -> ProcessAction s
-          -> Process (ProcessReply s m)
-replyWith msg st = return $ ProcessReply msg st
+          -> Process (ProcessReply r s)
+replyWith r s = return $ ProcessReply r s
 
 -- | Instructs the process to skip sending a reply /and/ evaluate a 'ProcessAction'
-noReply :: (Serializable r) => ProcessAction s -> Process (ProcessReply s r)
+noReply :: (Serializable r) => ProcessAction s -> Process (ProcessReply r s)
 noReply = return . NoReply
 
 -- | Continue without giving a reply to the caller - equivalent to 'continue',
 -- but usable in a callback passed to the 'handleCall' family of functions.
-noReply_ :: forall s r . (Serializable r) => s -> Process (ProcessReply s r)
+noReply_ :: forall s r . (Serializable r) => s -> Process (ProcessReply r s)
 noReply_ s = continue s >>= noReply
 
 -- | Halt process execution during a call handler, without paying any attention
 -- to the expected return type.
-haltNoReply_ :: TerminateReason -> Process (ProcessReply s TerminateReason)
+haltNoReply_ :: ExitReason -> Process (ProcessReply ExitReason s)
 haltNoReply_ r = stop r >>= noReply
 
 -- | Instructs the process to continue running and receiving messages.
@@ -151,16 +151,16 @@ hibernate_ :: TimeInterval -> (s -> Process (ProcessAction s))
 hibernate_ d = return . ProcessHibernate d
 
 -- | Instructs the process to terminate, giving the supplied reason. If a valid
--- 'terminateHandler' is installed, it will be called with the 'TerminateReason'
+-- 'terminateHandler' is installed, it will be called with the 'ExitReason'
 -- returned from this call, along with the process state.
-stop :: TerminateReason -> Process (ProcessAction s)
+stop :: ExitReason -> Process (ProcessAction s)
 stop r = return $ ProcessStop r
 
 -- | Version of 'stop' that can be used in handlers that ignore process state.
 --
--- > action (\ClientError -> stop_ TerminateNormal)
+-- > action (\ClientError -> stop_ ExitNormal)
 --
-stop_ :: TerminateReason -> (s -> Process (ProcessAction s))
+stop_ :: ExitReason -> (s -> Process (ProcessAction s))
 stop_ r _ = stop r
 
 -- | Sends a reply explicitly to a 'Caller'.
@@ -222,19 +222,19 @@ handleCallIf_ cond handler
 -- > handleCall = handleCallIf (const True)
 --
 handleCall :: (Serializable a, Serializable b)
-           => (s -> a -> Process (ProcessReply s b))
+           => (s -> a -> Process (ProcessReply b s))
            -> Dispatcher s
 handleCall = handleCallIf $ state (const True)
 
 -- | Constructs a 'call' handler from an ordinary function in the 'Process'
--- monad. Given a function @f :: (s -> a -> Process (ProcessReply s b))@,
+-- monad. Given a function @f :: (s -> a -> Process (ProcessReply b s))@,
 -- the expression @handleCall f@ will yield a 'Dispatcher' for inclusion
 -- in a 'Behaviour' specification for the /GenProcess/. Messages are only
 -- dispatched to the handler if the supplied condition evaluates to @True@
 --
 handleCallIf :: forall s a b . (Serializable a, Serializable b)
     => Condition s a -- ^ predicate that must be satisfied for the handler to run
-    -> (s -> a -> Process (ProcessReply s b))
+    -> (s -> a -> Process (ProcessReply b s))
         -- ^ a reply yielding function over the process state and input message
     -> Dispatcher s
 handleCallIf cond handler
@@ -243,7 +243,7 @@ handleCallIf cond handler
     , dispatchIf = checkCall cond
     }
   where doHandle :: (Serializable a, Serializable b)
-                 => (s -> a -> Process (ProcessReply s b))
+                 => (s -> a -> Process (ProcessReply b s))
                  -> s
                  -> Message a
                  -> Process (ProcessAction s)
@@ -257,7 +257,7 @@ handleCallIf cond handler
 -- worker (or stash it away itself) and return 'noReply'.
 --
 handleCallFrom :: forall s a b . (Serializable a, Serializable b)
-           => (s -> CallRef -> a -> Process (ProcessReply s b))
+           => (s -> CallRef -> a -> Process (ProcessReply b s))
            -> Dispatcher s
 handleCallFrom = handleCallFromIf $ state (const True)
 
@@ -266,7 +266,7 @@ handleCallFrom = handleCallFromIf $ state (const True)
 --
 handleCallFromIf :: forall s a b . (Serializable a, Serializable b)
     => Condition s a -- ^ predicate that must be satisfied for the handler to run
-    -> (s -> CallRef -> a -> Process (ProcessReply s b))
+    -> (s -> CallRef -> a -> Process (ProcessReply b s))
         -- ^ a reply yielding function over the process state, sender and input message
     -> Dispatcher s
 handleCallFromIf cond handler
@@ -275,7 +275,7 @@ handleCallFromIf cond handler
     , dispatchIf = checkCall cond
     }
   where doHandle :: (Serializable a, Serializable b)
-                 => (s -> CallRef -> a -> Process (ProcessReply s b))
+                 => (s -> CallRef -> a -> Process (ProcessReply b s))
                  -> s
                  -> Message a
                  -> Process (ProcessAction s)
@@ -333,7 +333,7 @@ handleCastIf_ cond h
 -- need only decide to stop, as the terminate handler can deal with state
 -- cleanup etc). For example:
 --
--- @action (\MyCriticalErrorSignal -> stop_ TerminateNormal)@
+-- @action (\MyCriticalSignal -> stop_ ExitNormal)@
 --
 action :: forall s a . (Serializable a)
     => (a -> (s -> Process (ProcessAction s)))
@@ -407,7 +407,7 @@ handleExit h = ExitSignalDispatcher { dispatchExit = doHandleExit h }
 -- so we handle it here instead and return the 'action' to the loop
 mkReply :: (Serializable b)
         => CallRef
-        -> ProcessReply s b
+        -> ProcessReply b s
         -> Process (ProcessAction s)
 mkReply _ (NoReply a)         = return a
 mkReply c (ProcessReply r' a) =
