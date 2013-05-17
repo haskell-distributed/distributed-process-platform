@@ -25,6 +25,7 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
   , DeferredDispatcher(..)
   , ExitSignalDispatcher(..)
   , MessageMatcher(..)
+  , DynMessageHandler(..)
   , Message(..)
   , CallResponse(..)
   , CallId
@@ -131,23 +132,31 @@ type TimeoutHandler s = s -> Delay -> Process (ProcessAction s)
 
 -- | Provides dispatch from cast and call messages to a typed handler.
 data Dispatcher s =
-    forall a . (Serializable a) => Dispatch {
-        dispatch :: s -> Message a -> Process (ProcessAction s)
-      }
-  | forall a . (Serializable a) => DispatchIf {
-        dispatch   :: s -> Message a -> Process (ProcessAction s)
-      , dispatchIf :: s -> Message a -> Bool
-      }
+    forall a . (Serializable a) =>
+    Dispatch
+    {
+      dispatch :: s -> Message a -> Process (ProcessAction s)
+    }
+  | forall a . (Serializable a) =>
+    DispatchIf
+    {
+      dispatch   :: s -> Message a -> Process (ProcessAction s)
+    , dispatchIf :: s -> Message a -> Bool
+    }
 
 -- | Provides dispatch for any input, returns 'Nothing' for unhandled messages.
-data DeferredDispatcher s = DeferredDispatcher {
+data DeferredDispatcher s =
+  DeferredDispatcher
+  {
     dispatchInfo :: s
                  -> P.Message
                  -> Process (Maybe (ProcessAction s))
   }
 
 -- | Provides dispatch for any exit signal - returns 'Nothing' for unhandled exceptions
-data ExitSignalDispatcher s = ExitSignalDispatcher {
+data ExitSignalDispatcher s =
+  ExitSignalDispatcher
+  {
     dispatchExit :: s
                  -> ProcessId
                  -> P.Message
@@ -155,22 +164,46 @@ data ExitSignalDispatcher s = ExitSignalDispatcher {
   }
 
 class MessageMatcher d where
-    matchDispatch :: UnhandledMessagePolicy -> s -> d s -> Match (ProcessAction s)
+  matchDispatch :: UnhandledMessagePolicy -> s -> d s -> Match (ProcessAction s)
 
 instance MessageMatcher Dispatcher where
   matchDispatch _ s (Dispatch   d)      = match (d s)
   matchDispatch _ s (DispatchIf d cond) = matchIf (cond s) (d s)
 
+class DynMessageHandler d where
+  dynHandleMessage :: UnhandledMessagePolicy
+                   -> s
+                   -> d s
+                   -> P.Message
+                   -> Process (Maybe (ProcessAction s))
+
+instance DynMessageHandler Dispatcher where
+  dynHandleMessage _ s (Dispatch   d)   msg = handleMessage   msg (d s)
+  dynHandleMessage _ s (DispatchIf d c) msg = handleMessageIf msg (c s) (d s)
+
+instance DynMessageHandler DeferredDispatcher where
+  dynHandleMessage _ s (DeferredDispatcher d) = d s
+
 data Priority s =
-    PrioritiseCall { prioritise :: s -> P.Message -> Process (Maybe Int) }
-  | PrioritiseCast { prioritise :: s -> P.Message -> Process (Maybe Int) }
-  | PrioritiseInfo { prioritise :: s -> P.Message -> Process (Maybe Int) }
+    PrioritiseCall
+    {
+      prioritise :: s -> P.Message -> Process (Maybe (Int, P.Message))
+    }
+  | PrioritiseCast
+    {
+      prioritise :: s -> P.Message -> Process (Maybe (Int, P.Message))
+    }
+  | PrioritiseInfo
+    {
+      prioritise :: s -> P.Message -> Process (Maybe (Int, P.Message))
+    }
 
 data PrioritisedProcessDefinition s =
-    PrioritisedProcessDefinition {
-        processDef :: ProcessDefinition s
-      , priorities :: [Priority s]
-      }
+  PrioritisedProcessDefinition
+  {
+    processDef :: ProcessDefinition s
+  , priorities :: [Priority s]
+  }
 
 -- | Policy for handling unexpected messages, i.e., messages which are not
 -- sent using the 'call' or 'cast' APIs, and which are not handled by any of the
