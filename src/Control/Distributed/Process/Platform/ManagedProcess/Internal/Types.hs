@@ -14,12 +14,18 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
   , ProcessReply(..)
   , CallHandler
   , CastHandler
+  , DeferredCallHandler
+  , StatelessCallHandler
+  , InfoHandler
+  , ChannelHandler
+  , StatelessChannelHandler
   , InitHandler
   , ShutdownHandler
   , TimeoutHandler
   , UnhandledMessagePolicy(..)
   , ProcessDefinition(..)
   , Priority(..)
+  , DispatchPriority(..)
   , PrioritisedProcessDefinition(..)
   , Dispatcher(..)
   , DeferredDispatcher(..)
@@ -36,6 +42,9 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import Control.Distributed.Process hiding (Message)
 import qualified Control.Distributed.Process as P (Message)
 import Control.Distributed.Process.Serializable
+import Control.Distributed.Process.Platform.Internal.Primitives
+  ( Addressable(..)
+  )
 import Control.Distributed.Process.Platform.Internal.Types
   ( Recipient(..)
   , ExitReason(..)
@@ -55,21 +64,26 @@ import GHC.Generics
 
 type CallId = MonitorRef
 
-newtype CallRef = CallRef { unCaller :: (Recipient, CallId) }
+newtype CallRef a = CallRef { unCaller :: (Recipient, CallId) }
   deriving (Eq, Show, Typeable, Generic)
-instance Binary CallRef where
+instance Serializable a => Binary (CallRef a) where
 
-makeRef :: Recipient -> CallId -> CallRef
+makeRef :: forall a . (Serializable a) => Recipient -> CallId -> CallRef a
 makeRef r c = CallRef (r, c)
 
-data Message a =
+instance Addressable (CallRef a) where
+  resolve (CallRef (r, _))            = resolve r
+  sendTo  (CallRef (client, tag)) msg = sendTo client (CallResponse msg tag)
+
+data Message a b =
     CastMessage a
-  | CallMessage a CallRef
+  | CallMessage a (CallRef b)
+  | ChanMessage a (SendPort b)
   deriving (Typeable, Generic)
 
-instance Serializable a => Binary (Message a) where
-deriving instance Eq a => Eq (Message a)
-deriving instance Show a => Show (Message a)
+instance (Serializable a, Serializable b) => Binary (Message a b) where
+deriving instance (Eq a, Eq b) => Eq (Message a b)
+deriving instance (Show a, Show b) => Show (Message a b)
 
 data CallResponse a = CallResponse a CallId
   deriving (Typeable, Generic)
@@ -107,10 +121,6 @@ data ProcessReply r s =
     ProcessReply r (ProcessAction s)
   | NoReply (ProcessAction s)
 
-type CallHandler a s = s -> a -> Process (ProcessReply s a)
-
-type CastHandler s = s -> Process ()
-
 -- | Wraps a predicate that is used to determine whether or not a handler
 -- is valid based on some combination of the current process state, the
 -- type and/or value of the input message or both.
@@ -118,6 +128,29 @@ data Condition s m =
     Condition (s -> m -> Bool)  -- ^ predicated on the process state /and/ the message
   | State     (s -> Bool)       -- ^ predicated on the process state only
   | Input     (m -> Bool)       -- ^ predicated on the input message only
+
+
+-- | An expression used to handle a /call/ message.
+type CallHandler s a b = s -> a -> Process (ProcessReply b s)
+
+-- | An expression used to handle a /call/ message where the reply is deferred
+-- via the 'CallRef'.
+type DeferredCallHandler s a b = s -> CallRef b -> a -> Process (ProcessReply b s)
+
+-- | An expression used to handle a /call/ message in a stateless process.
+type StatelessCallHandler a b = a -> CallRef b -> Process (ProcessReply b ())
+
+-- | An expression used to handle a /cast/ message.
+type CastHandler s a = s -> a -> Process (ProcessAction s)
+
+-- | An expression used to handle an /info/ message.
+type InfoHandler s a = s -> a -> Process (ProcessAction s)
+
+-- | An expression used to handle a /channel/ message.
+type ChannelHandler s a b = s -> SendPort b -> a -> Process (ProcessAction s)
+
+-- | An expression used to handle a /channel/ message in a stateless process.
+type StatelessChannelHandler a b = SendPort b -> a -> Process (ProcessAction ())
 
 -- | An expression used to initialise a process with its state.
 type InitHandler a s = a -> Process (InitResult s)
@@ -132,16 +165,16 @@ type TimeoutHandler s = s -> Delay -> Process (ProcessAction s)
 
 -- | Provides dispatch from cast and call messages to a typed handler.
 data Dispatcher s =
-    forall a . (Serializable a) =>
+    forall a b . (Serializable a, Serializable b) =>
     Dispatch
     {
-      dispatch :: s -> Message a -> Process (ProcessAction s)
+      dispatch :: s -> Message a b -> Process (ProcessAction s)
     }
-  | forall a . (Serializable a) =>
+  | forall a b . (Serializable a, Serializable b) =>
     DispatchIf
     {
-      dispatch   :: s -> Message a -> Process (ProcessAction s)
-    , dispatchIf :: s -> Message a -> Bool
+      dispatch   :: s -> Message a b -> Process (ProcessAction s)
+    , dispatchIf :: s -> Message a b -> Bool
     }
 
 -- | Provides dispatch for any input, returns 'Nothing' for unhandled messages.
@@ -184,7 +217,9 @@ instance DynMessageHandler Dispatcher where
 instance DynMessageHandler DeferredDispatcher where
   dynHandleMessage _ s (DeferredDispatcher d) = d s
 
-data Priority s =
+newtype Priority a = Priority { getPrio :: Int }
+
+data DispatchPriority s =
     PrioritiseCall
     {
       prioritise :: s -> P.Message -> Process (Maybe (Int, P.Message))
@@ -202,7 +237,7 @@ data PrioritisedProcessDefinition s =
   PrioritisedProcessDefinition
   {
     processDef :: ProcessDefinition s
-  , priorities :: [Priority s]
+  , priorities :: [DispatchPriority s]
   }
 
 -- | Policy for handling unexpected messages, i.e., messages which are not

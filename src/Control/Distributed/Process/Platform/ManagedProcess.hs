@@ -202,21 +202,14 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , runProcess
   , prioritised
     -- * Client interactions
-  , shutdown
-  , defaultProcess
-  , defaultProcessWithPriorities
-  , statelessProcess
-  , statelessInit
-  , call
-  , safeCall
-  , tryCall
-  , callAsync
-  , callTimeout
-  , cast
+  , module Control.Distributed.Process.Platform.ManagedProcess.Client
     -- * Defining server processes
   , ProcessDefinition(..)
   , PrioritisedProcessDefinition(..)
   , Priority(..)
+  , DispatchPriority()
+  , Dispatcher()
+  , DeferredDispatcher()
   , ShutdownHandler
   , TimeoutHandler
   , ProcessAction(..)
@@ -225,6 +218,11 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , CastHandler
   , UnhandledMessagePolicy(..)
   , CallRef
+  , defaultProcess
+  , defaultProcessWithPriorities
+  , statelessProcess
+  , statelessInit
+    -- * Server side callbacks
   , handleCall
   , handleCallIf
   , handleCallFrom
@@ -232,16 +230,22 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , handleCast
   , handleCastIf
   , handleInfo
+  , handleRpcChan
+  , handleRpcChanIf
+  , action
   , handleDispatch
   , handleExit
-    -- * Prioritised mailboxes
-  , module Control.Distributed.Process.Platform.ManagedProcess.Server.Priority
-    -- * Stateless handlers
-  , action
+    -- * Stateless callbacks
   , handleCall_
+  , handleCallFrom_
   , handleCallIf_
+  , handleCallFromIf_
   , handleCast_
   , handleCastIf_
+  , handleRpcChan_
+  , handleRpcChanIf_
+    -- * Prioritised mailboxes
+  , module Control.Distributed.Process.Platform.ManagedProcess.Server.Priority
     -- * Constructing handler results
   , condition
   , state
@@ -260,6 +264,7 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , stop
   , stop_
   , replyTo
+  , replyChan
   ) where
 
 import Control.Distributed.Process hiding (call)
@@ -314,11 +319,11 @@ defaultProcess = ProcessDefinition {
   } :: ProcessDefinition s
 
 prioritised :: ProcessDefinition s
-            -> [Priority s]
+            -> [DispatchPriority s]
             -> PrioritisedProcessDefinition s
 prioritised def ps = PrioritisedProcessDefinition def ps
 
-defaultProcessWithPriorities :: [Priority s] -> PrioritisedProcessDefinition s
+defaultProcessWithPriorities :: [DispatchPriority s] -> PrioritisedProcessDefinition s
 defaultProcessWithPriorities = PrioritisedProcessDefinition defaultProcess
 
 -- | A basic, stateless process definition, where the unhandled message policy

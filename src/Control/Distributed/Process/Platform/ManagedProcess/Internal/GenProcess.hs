@@ -64,7 +64,7 @@ recvQueue p s t q =
       (ProcessStop r)          -> handleStop s r >> return (r :: ExitReason)
   where
     recvQueueAux :: PrioritisedProcessDefinition s
-                 -> [Priority s]
+                 -> [DispatchPriority s]
                  -> s
                  -> Delay
                  -> Queue
@@ -74,7 +74,7 @@ recvQueue p s t q =
       drainMessageQueue pState prioritizers queue >>= recvQueue ppDef pState t'
 
     processNext :: ProcessDefinition s
-                -> [Priority s]
+                -> [DispatchPriority s]
                 -> s
                 -> TimeoutSpec
                 -> Queue
@@ -126,7 +126,7 @@ recvQueue p s t q =
     drainOrTimeout :: s
                    -> Delay
                    -> Queue
-                   -> [Priority s]
+                   -> [DispatchPriority s]
                    -> TimeoutHandler s
                    -> Process (ProcessAction s, Delay, Queue)
     drainOrTimeout pState delay queue ps' h = do
@@ -142,7 +142,7 @@ recvQueue p s t q =
             -- QUESTION: should this drop back to `drainMessageQueue' now???
             return $ (ProcessContinue pState, delay, queue')
 
-drainMessageQueue :: s -> [Priority s] -> Queue -> Process Queue
+drainMessageQueue :: s -> [DispatchPriority s] -> Queue -> Process Queue
 drainMessageQueue pState priorities' queue = do
   m <- receiveTimeout 0 [ matchMessage return ]
   case m of
@@ -152,7 +152,7 @@ drainMessageQueue pState priorities' queue = do
       drainMessageQueue pState priorities' queue'
 
 enqueueMessage :: s
-               -> [Priority s]
+               -> [DispatchPriority s]
                -> P.Message
                -> Queue
                -> Process Queue
@@ -163,7 +163,7 @@ enqueueMessage s (p:ps) m' q = let checkPrio = prioritise p s in do
     maybeEnqueue :: s
                  -> P.Message
                  -> Queue
-                 -> [Priority s]
+                 -> [DispatchPriority s]
                  -> Maybe (Int, P.Message)
                  -> Process Queue
     maybeEnqueue s' msg q' ps' Nothing       = enqueueMessage s' ps' msg q'

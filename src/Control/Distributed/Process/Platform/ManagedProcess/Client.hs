@@ -23,12 +23,16 @@ module Control.Distributed.Process.Platform.ManagedProcess.Client
   , callTimeout
   , callAsync
   , cast
+  , callChan
+  , syncCallChan
+  , syncSafeCallChan
   ) where
 
 import Control.Distributed.Process hiding (call)
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Async hiding (check)
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
+import qualified Control.Distributed.Process.Platform.ManagedProcess.Internal.Types as T
 import Control.Distributed.Process.Platform.Internal.Primitives
 import Control.Distributed.Process.Platform.Internal.Types
   ( Recipient(..)
@@ -101,14 +105,38 @@ callAsync :: forall s a b . (Addressable s, Serializable a, Serializable b)
           => s -> a -> Process (Async b)
 callAsync server msg = async $ call server msg
 
--- | Sends a /cast/ message to the server identified by 'ServerId'. The server
+-- | Sends a /cast/ message to the server identified by @server@. The server
 -- will not send a response. Like Cloud Haskell's 'send' primitive, cast is
 -- fully asynchronous and /never fails/ - therefore 'cast'ing to a non-existent
 -- (e.g., dead) server process will not generate an error.
 --
 cast :: forall a m . (Addressable a, Serializable m)
                  => a -> m -> Process ()
-cast server msg = sendTo server (CastMessage msg)
+cast server msg = sendTo server ((CastMessage msg) :: T.Message m ())
+
+-- | Sends a /channel/ message to the server and returns a @ReceivePort@ on
+-- which the reponse can be delivered, if the server so chooses (i.e., the
+-- might ignore the request or crash).
+callChan :: forall s a b . (Addressable s, Serializable a, Serializable b)
+         => s -> a -> Process (ReceivePort b)
+callChan server msg = do
+  (sp, rp) <- newChan
+  sendTo server ((ChanMessage msg sp) :: T.Message a b)
+  return rp
+
+syncCallChan :: forall s a b . (Addressable s, Serializable a, Serializable b)
+         => s -> a -> Process b
+syncCallChan server msg = do
+  r <- syncSafeCallChan server msg
+  case r of
+    Left e   -> die e
+    Right r' -> return r'
+
+syncSafeCallChan :: forall s a b . (Addressable s, Serializable a, Serializable b)
+            => s -> a -> Process (Either ExitReason b)
+syncSafeCallChan server msg = do
+  rp <- callChan server msg
+  awaitResponse server [ matchChan rp (return . Right) ]
 
 -- note [rpc calls]
 -- One problem with using plain expect/receive primitives to perform a
@@ -128,19 +156,19 @@ cast server msg = sendTo server (CastMessage msg)
 -- incur delays in delivery. The callAsync function provides a neat
 -- work-around for that, relying on the insulation provided by Async.
 
-initCall :: forall s a . (Addressable s, Serializable a)
-         => s -> a -> Process CallRef
+initCall :: forall s a b . (Addressable s, Serializable a, Serializable b)
+         => s -> a -> Process (CallRef b)
 initCall sid msg = do
   (Just pid) <- resolve sid
   mRef <- monitor pid
   self <- getSelfPid
   let cRef = makeRef (Pid self) mRef in do
-    sendTo sid $ CallMessage msg cRef
+    sendTo sid $ ((CallMessage msg cRef) :: T.Message a b)
     return cRef
 
 waitResponse :: forall b. (Serializable b)
              => Maybe TimeInterval
-             -> CallRef
+             -> CallRef b
              -> Process (Maybe (Either ExitReason b))
 waitResponse mTimeout cRef =
   let (_, mRef) = unCaller cRef
