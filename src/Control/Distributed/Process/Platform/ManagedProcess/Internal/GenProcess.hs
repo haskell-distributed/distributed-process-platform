@@ -52,9 +52,9 @@ recvQueue :: PrioritisedProcessDefinition s
           -> Queue
           -> Process ExitReason
 recvQueue p s t q =
-  let pDef          = processDef p
-      ps            = priorities p
-      handleStop    = shutdownHandler pDef
+  let pDef       = processDef p
+      ps         = priorities p
+      handleStop = shutdownHandler pDef
   in do
     (ac, d, q') <- processNext pDef ps s t q
     case ac of
@@ -284,9 +284,9 @@ pollTimer (_, Just (tref, sig)) = do
 shutdownHandler' :: Dispatcher s
 shutdownHandler' = handleCast (\_ Shutdown -> stop $ ExitNormal)
 
--- @(ProcessExitException from Shutdown)@ will stop the server gracefully
+-- @(ProcessExitException from ExitShutdown)@ will stop the server gracefully
 trapExit :: ExitSignalDispatcher s
-trapExit = handleExit (\_ _ (reason :: ExitReason) -> stop reason)
+trapExit = handleExitIf (\_ r' -> (r' == ExitShutdown)) (\_ _ r -> stop r)
 
 block :: TimeInterval -> Process ()
 block i = liftIO $ threadDelay (asTimeout i)

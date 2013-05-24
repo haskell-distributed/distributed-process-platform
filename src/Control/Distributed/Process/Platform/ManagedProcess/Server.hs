@@ -46,7 +46,9 @@ module Control.Distributed.Process.Platform.ManagedProcess.Server
   , handleCastIf
   , handleInfo
   , handleDispatch
+  , handleDispatchIf
   , handleExit
+  , handleExitIf
     -- * Stateless handlers
   , action
   , handleCall_
@@ -466,6 +468,20 @@ handleExit h = ExitSignalDispatcher { dispatchExit = doHandleExit h }
                  -> P.Message
                  -> Process (Maybe (ProcessAction s))
     doHandleExit h' s p msg = handleMessage msg (h' s p)
+
+handleExitIf :: forall s a . (Serializable a)
+             => (s -> a -> Bool)
+             -> (s -> ProcessId -> a -> Process (ProcessAction s))
+             -> ExitSignalDispatcher s
+handleExitIf c h = ExitSignalDispatcher { dispatchExit = doHandleExit c h }
+  where
+    doHandleExit :: (s -> a -> Bool)
+                 -> (s -> ProcessId -> a -> Process (ProcessAction s))
+                 -> s
+                 -> ProcessId
+                 -> P.Message
+                 -> Process (Maybe (ProcessAction s))
+    doHandleExit c' h' s p msg = handleMessageIf msg (c' s) (h' s p)
 
 -- handling 'reply-to' in the main process loop is awkward at best,
 -- so we handle it here instead and return the 'action' to the loop
