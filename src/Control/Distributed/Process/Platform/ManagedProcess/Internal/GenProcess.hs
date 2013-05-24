@@ -92,7 +92,7 @@ recvQueue p s t q =
               Nothing -> do
                 -- if the internal queue is empty, we fall back to reading the
                 -- actual mailbox, however if /that/ times out, then we need
-                -- to let the timeout handler kick in and make a decision
+                -- to let the timeout handler kick in again and make a decision
                 drainOrTimeout s' t' queue ps' h
               Just (m', q') -> do
                 act <- catchesExit (processApply def s' m')
