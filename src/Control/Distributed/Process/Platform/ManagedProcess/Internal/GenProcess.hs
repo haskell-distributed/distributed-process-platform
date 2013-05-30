@@ -286,7 +286,7 @@ shutdownHandler' = handleCast (\_ Shutdown -> stop $ ExitNormal)
 
 -- @(ProcessExitException from ExitShutdown)@ will stop the server gracefully
 trapExit :: ExitSignalDispatcher s
-trapExit = handleExitIf (\_ r' -> (r' == ExitShutdown)) (\_ _ r -> stop r)
+trapExit = handleExit (\_ _ (r :: ExitReason) -> stop r)
 
 block :: TimeInterval -> Process ()
 block i = liftIO $ threadDelay (asTimeout i)
