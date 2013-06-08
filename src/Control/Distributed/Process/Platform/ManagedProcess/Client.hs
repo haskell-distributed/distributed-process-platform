@@ -33,7 +33,7 @@ import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Async hiding (check)
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import qualified Control.Distributed.Process.Platform.ManagedProcess.Internal.Types as T
-import Control.Distributed.Process.Platform.Internal.Primitives
+import Control.Distributed.Process.Platform.Internal.Primitives hiding (monitor)
 import Control.Distributed.Process.Platform.Internal.Types
   ( Recipient(..)
   , ExitReason(..)
