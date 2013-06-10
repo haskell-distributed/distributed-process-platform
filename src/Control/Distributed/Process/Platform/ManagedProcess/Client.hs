@@ -21,6 +21,7 @@ module Control.Distributed.Process.Platform.ManagedProcess.Client
   , safeCall
   , tryCall
   , callTimeout
+  , flushPendingCalls
   , callAsync
   , cast
   , callChan
@@ -86,6 +87,18 @@ tryCall s m = initCall s m >>= waitResponse Nothing >>= decodeResult
 --
 -- If the result of the call is a failure (or the call was cancelled) then
 -- the calling process will exit, with the 'ExitReason' given as the reason.
+-- If the call times out however, the semantics on the server side are
+-- undefined, i.e., the server may or may not successfully process the
+-- request and may (or may not) send a response at a later time. From the
+-- callers perspective, this is somewhat troublesome, since the call result
+-- cannot be decoded directly. In this case, the 'flushPendingCalls' API /may/
+-- be used to attempt to receive the message later on, however this makes
+-- /no attempt whatsoever/ to guarantee /which/ call response will in fact
+-- be returned to the caller. In those semantics are unsuited to your
+-- application, you might choose to @exit@ or @die@ in case of a timeout,
+-- or alternatively, use the 'callAsync' API and associated @waitTimeout@
+-- function (in the /Async API/), which takes a re-usable handle on which
+-- to wait (with timeouts) multiple times.
 --
 callTimeout :: forall s a b . (Addressable s, Serializable a, Serializable b)
                  => s -> a -> TimeInterval -> Process (Maybe b)
@@ -96,6 +109,15 @@ callTimeout s m d = initCall s m >>= waitResponse (Just d) >>= decodeResult
         decodeResult Nothing               = return Nothing
         decodeResult (Just (Right result)) = return $ Just result
         decodeResult (Just (Left reason))  = die reason
+
+flushPendingCalls :: forall b . (Serializable b)
+                  => TimeInterval
+                  -> (b -> Process b)
+                  -> Process (Maybe b)
+flushPendingCalls d proc = do
+  receiveTimeout (asTimeout d) [
+      match (\(CallResponse (m :: b) _) -> proc m)
+    ]
 
 -- | Invokes 'call' /out of band/, and returns an "async handle."
 --
@@ -179,6 +201,6 @@ waitResponse mTimeout cRef =
                   ]
       err r     = ExitOther $ show r in
     case mTimeout of
-      (Just ti) -> receiveTimeout (asTimeout ti) matchers
-      Nothing   -> receiveWait matchers >>= return . Just
+      (Just ti) -> finally (receiveTimeout (asTimeout ti) matchers) (unmonitor mRef)
+      Nothing   -> finally (receiveWait matchers >>= return . Just) (unmonitor mRef)
 
