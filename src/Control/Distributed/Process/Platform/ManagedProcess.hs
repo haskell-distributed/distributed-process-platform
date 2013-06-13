@@ -287,12 +287,22 @@ serve :: a
       -> Process ()
 serve argv init def = runProcess (recvLoop def) argv init
 
+-- | Starts a prioritised managed process configured with the supplied process
+-- definition, using an init handler and its initial arguments.
 pserve :: a
        -> InitHandler a s
        -> PrioritisedProcessDefinition s
        -> Process ()
 pserve argv init def = runProcess (precvLoop def) argv init
 
+-- | Wraps any /process loop/ and enforces that it adheres to the
+-- managed process' start/stop semantics, i.e., evaluating the
+-- @InitHandler@ with an initial state and delay will either
+-- @die@ due to @InitStop@, exit silently (due to @InitIgnore@)
+-- or evaluate the process' @loop@. The supplied @loop@ must evaluate
+-- to @ExitNormal@, otherwise the evaluating processing will will
+-- @die@ with the @ExitReason@.
+--
 runProcess :: (s -> Delay -> Process ExitReason)
            -> a
            -> InitHandler a s
@@ -318,6 +328,9 @@ defaultProcess = ProcessDefinition {
   , unhandledMessagePolicy = Terminate
   } :: ProcessDefinition s
 
+-- | Turns a standard 'ProcessDefinition' into a 'PrioritisedProcessDefinition',
+-- by virtue of the supplied list of 'DispatchPriority' expressions.
+--
 prioritised :: ProcessDefinition s
             -> [DispatchPriority s]
             -> PrioritisedProcessDefinition s
