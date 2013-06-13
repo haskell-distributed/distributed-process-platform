@@ -31,7 +31,7 @@ import TestUtils
 testSendAfter :: TestResult Bool -> Process ()
 testSendAfter result =
   let delay = seconds 1 in do
-  sleep $ seconds 10 
+  sleep $ seconds 10
   pid <- getSelfPid
   _ <- sendAfter delay pid Ping
   hdInbox <- receiveTimeout (asTimeout (seconds 2)) [
@@ -101,38 +101,38 @@ testTimerReset result = do
   -- this ticker will 'fire' every 10 seconds
   ref <- ticker delay listenerPid
 
-  sleep $ seconds 2  
+  sleep $ seconds 2
   resetTimer ref
-  
+
   -- at this point, the timer should be back to roughly a 5 second count down
   -- so our few remaining cycles no ticks ought to make it to the listener
   -- therefore we kill off the timer and the listener now and take the count
   cancelTimer ref
   kill listenerPid "stop!"
-    
+
   -- how many 'ticks' did the listener observer? (hopefully none!)
   count <- liftIO $ takeMVar counter
-  liftIO $ putMVar result count                                             
+  liftIO $ putMVar result count
 
 testTimerFlush :: TestResult Bool -> Process ()
 testTimerFlush result = do
   let delay = seconds 1
   self <- getSelfPid
   ref  <- ticker delay self
-  
+
   -- sleep so we *should* have a message in our 'mailbox'
   sleep $ milliSeconds 2
-  
+
   -- flush it out if it's there
   flushTimer ref Tick (Delay $ seconds 3)
-  
+
   m <- expectTimeout 10
   case m of
       Nothing   -> stash result True
       Just Tick -> stash result False
 
 testSleep :: TestResult Bool -> Process ()
-testSleep r = do 
+testSleep r = do
   sleep $ seconds 20
   stash r True
 
