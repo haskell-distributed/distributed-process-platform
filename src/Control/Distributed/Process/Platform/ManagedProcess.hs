@@ -262,6 +262,7 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , hibernate
   , hibernate_
   , stop
+  , stopWith
   , stop_
   , replyTo
   , replyChan

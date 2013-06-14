@@ -26,6 +26,7 @@ module Control.Distributed.Process.Platform.ManagedProcess.Server
   , timeoutAfter
   , hibernate
   , stop
+  , stopWith
   , replyTo
   , replyChan
     -- * Stateless actions
@@ -164,6 +165,10 @@ hibernate_ d = return . ProcessHibernate d
 -- returned from this call, along with the process state.
 stop :: ExitReason -> Process (ProcessAction s)
 stop r = return $ ProcessStop r
+
+-- | As 'stop', but provides an updated state for the shutdown handler.
+stopWith :: s -> ExitReason -> Process (ProcessAction s)
+stopWith s r = return $ ProcessStopping s r
 
 -- | Version of 'stop' that can be used in handlers that ignore process state.
 --

@@ -107,12 +107,14 @@ data InitResult s =
 --     'timeoutAfter'
 --     'hibernate'
 --     'stop'
+--     'stopWith'
 --
 data ProcessAction s =
     ProcessContinue  s              -- ^ continue with (possibly new) state
   | ProcessTimeout   TimeInterval s -- ^ timeout if no messages are received
   | ProcessHibernate TimeInterval s -- ^ hibernate for /delay/
   | ProcessStop      ExitReason     -- ^ stop the process, giving @ExitReason@
+  | ProcessStopping  s ExitReason   -- ^ stop the process with @ExitReason@, with updated state
 
 -- | Returned from handlers for the synchronous 'call' protocol, encapsulates
 -- the reply data /and/ the action to take after sending the reply. A handler

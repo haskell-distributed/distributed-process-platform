@@ -62,6 +62,7 @@ recvQueue p s t q =
       (ProcessTimeout t' s')   -> recvQueueAux p ps s' (Delay t') q'
       (ProcessHibernate d' s') -> block d' >> recvQueueAux p ps s' d q'
       (ProcessStop r)          -> handleStop s r >> return (r :: ExitReason)
+      (ProcessStopping s' r)   -> handleStop s' r >> return (r :: ExitReason)
   where
     recvQueueAux :: PrioritisedProcessDefinition s
                  -> [DispatchPriority s]
