@@ -7,7 +7,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Control.Distributed.Process.Platform.Async.AsyncSTM
--- Copyright   :  (c) Tim Watson 2012, (c) Simon Marlow 2012
+-- Copyright   :  (c) Tim Watson 2012 - 2013, (c) Simon Marlow 2012
 -- License     :  BSD3 (see the file LICENSE)
 --
 -- Maintainer  :  Tim Watson <watson.timothy@gmail.com>
@@ -21,13 +21,13 @@
 -- The difference between 'Control.Distributed.Platform.Async.AsyncSTM' and
 -- 'Control.Distributed.Platform.Async.AsyncChan' is that handles of the
 -- former (i.e., returned by /this/ module) can be used by processes other
--- than the caller of 'async', but are not 'Serializable'.
+-- than the caller of 'async', though they're still not 'Serializable'.
 --
--- As with 'Control.Distributed.Platform.Async.AsyncChan', workers can be
+-- As with "Control.Distributed.Platform.Async.AsyncChan", workers can be
 -- started on a local or remote node.
 --
 -- Portions of this file are derived from the @Control.Concurrent.Async@
--- module, written by Simon Marlow.
+-- module, from the @async@ package written by Simon Marlow.
 -----------------------------------------------------------------------------
 
 module Control.Distributed.Process.Platform.Async.AsyncSTM

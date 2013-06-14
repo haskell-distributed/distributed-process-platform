@@ -14,15 +14,24 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
   , ProcessReply(..)
   , CallHandler
   , CastHandler
+  , DeferredCallHandler
+  , StatelessCallHandler
+  , InfoHandler
+  , ChannelHandler
+  , StatelessChannelHandler
   , InitHandler
-  , TerminateHandler
+  , ShutdownHandler
   , TimeoutHandler
   , UnhandledMessagePolicy(..)
   , ProcessDefinition(..)
+  , Priority(..)
+  , DispatchPriority(..)
+  , PrioritisedProcessDefinition(..)
   , Dispatcher(..)
   , DeferredDispatcher(..)
   , ExitSignalDispatcher(..)
   , MessageMatcher(..)
+  , DynMessageHandler(..)
   , Message(..)
   , CallResponse(..)
   , CallId
@@ -33,9 +42,12 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import Control.Distributed.Process hiding (Message)
 import qualified Control.Distributed.Process as P (Message)
 import Control.Distributed.Process.Serializable
+import Control.Distributed.Process.Platform.Internal.Primitives
+  ( Addressable(..)
+  )
 import Control.Distributed.Process.Platform.Internal.Types
   ( Recipient(..)
-  , TerminateReason(..)
+  , ExitReason(..)
   )
 import Control.Distributed.Process.Platform.Time
 
@@ -52,21 +64,26 @@ import GHC.Generics
 
 type CallId = MonitorRef
 
-newtype CallRef = CallRef { unCaller :: (Recipient, CallId) }
+newtype CallRef a = CallRef { unCaller :: (Recipient, CallId) }
   deriving (Eq, Show, Typeable, Generic)
-instance Binary CallRef where
+instance Serializable a => Binary (CallRef a) where
 
-makeRef :: Recipient -> CallId -> CallRef
+makeRef :: forall a . (Serializable a) => Recipient -> CallId -> CallRef a
 makeRef r c = CallRef (r, c)
 
-data Message a =
+instance Addressable (CallRef a) where
+  resolve (CallRef (r, _))            = resolve r
+  sendTo  (CallRef (client, tag)) msg = sendTo client (CallResponse msg tag)
+
+data Message a b =
     CastMessage a
-  | CallMessage a CallRef
+  | CallMessage a (CallRef b)
+  | ChanMessage a (SendPort b)
   deriving (Typeable, Generic)
 
-instance Serializable a => Binary (Message a) where
-deriving instance Eq a => Eq (Message a)
-deriving instance Show a => Show (Message a)
+instance (Serializable a, Serializable b) => Binary (Message a b) where
+deriving instance (Eq a, Eq b) => Eq (Message a b)
+deriving instance (Show a, Show b) => Show (Message a b)
 
 data CallResponse a = CallResponse a CallId
   deriving (Typeable, Generic)
@@ -78,9 +95,12 @@ deriving instance Show a => Show (CallResponse a)
 -- | Return type for and 'InitHandler' expression.
 data InitResult s =
     InitOk s Delay {-
-        ^ denotes successful initialisation, initial state and timeout -}
-  | forall r. (Serializable r)
-    => InitFail r -- ^ denotes failed initialisation and the reason
+        ^ a successful initialisation, initial state and timeout -}
+  | InitStop String {-
+        ^ failed initialisation and the reason, this will result in an error -}
+  | InitIgnore {-
+        ^ the process has decided not to continue starting - this is not an error -}
+  deriving (Typeable)
 
 -- | The action taken by a process after a handler has run and its updated state.
 -- See 'continue'
@@ -89,23 +109,17 @@ data InitResult s =
 --     'stop'
 --
 data ProcessAction s =
-    ProcessContinue  s                -- ^ continue with (possibly new) state
-  | ProcessTimeout   TimeInterval s   -- ^ timeout if no messages are received
-  | ProcessHibernate TimeInterval s   -- ^ hibernate for /delay/
-  | ProcessStop      TerminateReason  -- ^ stop the process, giving @TerminateReason@
+    ProcessContinue  s              -- ^ continue with (possibly new) state
+  | ProcessTimeout   TimeInterval s -- ^ timeout if no messages are received
+  | ProcessHibernate TimeInterval s -- ^ hibernate for /delay/
+  | ProcessStop      ExitReason     -- ^ stop the process, giving @ExitReason@
 
 -- | Returned from handlers for the synchronous 'call' protocol, encapsulates
 -- the reply data /and/ the action to take after sending the reply. A handler
 -- can return @NoReply@ if they wish to ignore the call.
-data ProcessReply s a =
-    ProcessReply a (ProcessAction s)
+data ProcessReply r s =
+    ProcessReply r (ProcessAction s)
   | NoReply (ProcessAction s)
-
-type CallHandler a s = s -> a -> Process (ProcessReply s a)
-
-type CastHandler s = s -> Process ()
-
--- type InfoHandler a = forall a b. (Serializable a, Serializable b) => a -> Process b
 
 -- | Wraps a predicate that is used to determine whether or not a handler
 -- is valid based on some combination of the current process state, the
@@ -115,11 +129,34 @@ data Condition s m =
   | State     (s -> Bool)       -- ^ predicated on the process state only
   | Input     (m -> Bool)       -- ^ predicated on the input message only
 
+
+-- | An expression used to handle a /call/ message.
+type CallHandler s a b = s -> a -> Process (ProcessReply b s)
+
+-- | An expression used to handle a /call/ message where the reply is deferred
+-- via the 'CallRef'.
+type DeferredCallHandler s a b = s -> CallRef b -> a -> Process (ProcessReply b s)
+
+-- | An expression used to handle a /call/ message in a stateless process.
+type StatelessCallHandler a b = a -> CallRef b -> Process (ProcessReply b ())
+
+-- | An expression used to handle a /cast/ message.
+type CastHandler s a = s -> a -> Process (ProcessAction s)
+
+-- | An expression used to handle an /info/ message.
+type InfoHandler s a = s -> a -> Process (ProcessAction s)
+
+-- | An expression used to handle a /channel/ message.
+type ChannelHandler s a b = s -> SendPort b -> a -> Process (ProcessAction s)
+
+-- | An expression used to handle a /channel/ message in a stateless process.
+type StatelessChannelHandler a b = SendPort b -> a -> Process (ProcessAction ())
+
 -- | An expression used to initialise a process with its state.
 type InitHandler a s = a -> Process (InitResult s)
 
 -- | An expression used to handle process termination.
-type TerminateHandler s = s -> TerminateReason -> Process ()
+type ShutdownHandler s = s -> ExitReason -> Process ()
 
 -- | An expression used to handle process timeouts.
 type TimeoutHandler s = s -> Delay -> Process (ProcessAction s)
@@ -128,23 +165,31 @@ type TimeoutHandler s = s -> Delay -> Process (ProcessAction s)
 
 -- | Provides dispatch from cast and call messages to a typed handler.
 data Dispatcher s =
-    forall a . (Serializable a) => Dispatch {
-        dispatch :: s -> Message a -> Process (ProcessAction s)
-      }
-  | forall a . (Serializable a) => DispatchIf {
-        dispatch   :: s -> Message a -> Process (ProcessAction s)
-      , dispatchIf :: s -> Message a -> Bool
-      }
+    forall a b . (Serializable a, Serializable b) =>
+    Dispatch
+    {
+      dispatch :: s -> Message a b -> Process (ProcessAction s)
+    }
+  | forall a b . (Serializable a, Serializable b) =>
+    DispatchIf
+    {
+      dispatch   :: s -> Message a b -> Process (ProcessAction s)
+    , dispatchIf :: s -> Message a b -> Bool
+    }
 
 -- | Provides dispatch for any input, returns 'Nothing' for unhandled messages.
-data DeferredDispatcher s = DeferredDispatcher {
+data DeferredDispatcher s =
+  DeferredDispatcher
+  {
     dispatchInfo :: s
                  -> P.Message
                  -> Process (Maybe (ProcessAction s))
   }
 
 -- | Provides dispatch for any exit signal - returns 'Nothing' for unhandled exceptions
-data ExitSignalDispatcher s = ExitSignalDispatcher {
+data ExitSignalDispatcher s =
+  ExitSignalDispatcher
+  {
     dispatchExit :: s
                  -> ProcessId
                  -> P.Message
@@ -152,17 +197,54 @@ data ExitSignalDispatcher s = ExitSignalDispatcher {
   }
 
 class MessageMatcher d where
-    matchDispatch :: UnhandledMessagePolicy -> s -> d s -> Match (ProcessAction s)
+  matchDispatch :: UnhandledMessagePolicy -> s -> d s -> Match (ProcessAction s)
 
 instance MessageMatcher Dispatcher where
   matchDispatch _ s (Dispatch   d)      = match (d s)
   matchDispatch _ s (DispatchIf d cond) = matchIf (cond s) (d s)
 
+class DynMessageHandler d where
+  dynHandleMessage :: UnhandledMessagePolicy
+                   -> s
+                   -> d s
+                   -> P.Message
+                   -> Process (Maybe (ProcessAction s))
+
+instance DynMessageHandler Dispatcher where
+  dynHandleMessage _ s (Dispatch   d)   msg = handleMessage   msg (d s)
+  dynHandleMessage _ s (DispatchIf d c) msg = handleMessageIf msg (c s) (d s)
+
+instance DynMessageHandler DeferredDispatcher where
+  dynHandleMessage _ s (DeferredDispatcher d) = d s
+
+newtype Priority a = Priority { getPrio :: Int }
+
+data DispatchPriority s =
+    PrioritiseCall
+    {
+      prioritise :: s -> P.Message -> Process (Maybe (Int, P.Message))
+    }
+  | PrioritiseCast
+    {
+      prioritise :: s -> P.Message -> Process (Maybe (Int, P.Message))
+    }
+  | PrioritiseInfo
+    {
+      prioritise :: s -> P.Message -> Process (Maybe (Int, P.Message))
+    }
+
+data PrioritisedProcessDefinition s =
+  PrioritisedProcessDefinition
+  {
+    processDef :: ProcessDefinition s
+  , priorities :: [DispatchPriority s]
+  }
+
 -- | Policy for handling unexpected messages, i.e., messages which are not
 -- sent using the 'call' or 'cast' APIs, and which are not handled by any of the
 -- 'handleInfo' handlers.
 data UnhandledMessagePolicy =
-    Terminate  -- ^ stop immediately, giving @TerminateOther "UnhandledInput"@ as the reason
+    Terminate  -- ^ stop immediately, giving @ExitOther "UnhandledInput"@ as the reason
   | DeadLetter ProcessId -- ^ forward the message to the given recipient
   | Drop                 -- ^ dequeue and then drop/ignore the message
 
@@ -173,7 +255,7 @@ data ProcessDefinition s = ProcessDefinition {
   , infoHandlers :: [DeferredDispatcher s] -- ^ functions that handle non call/cast messages
   , exitHandlers :: [ExitSignalDispatcher s] -- ^ functions that handle exit signals
   , timeoutHandler :: TimeoutHandler s   -- ^ a function that handles timeouts
-  , terminateHandler :: TerminateHandler s -- ^ a function that is run just before the process exits
+  , shutdownHandler :: ShutdownHandler s -- ^ a function that is run just before the process exits
   , unhandledMessagePolicy :: UnhandledMessagePolicy -- ^ how to deal with unhandled messages
   }
 

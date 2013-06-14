@@ -19,7 +19,7 @@
 -- remove the ambiguity, some combination of either qualification and/or the
 -- @hiding@ clause will be required.
 --
--- [Safe Server Callbacks]
+-- [Restricted Server Callbacks]
 --
 -- The idea behind this module is to provide /safe/ callbacks, i.e., server
 -- code that is free from side effects. This safety is enforced by the type
@@ -34,7 +34,7 @@ module Control.Distributed.Process.Platform.ManagedProcess.Server.Restricted
   ( -- * Exported Types
     RestrictedProcess
   , Result(..)
-  , SafeAction(..)
+  , RestrictedAction(..)
     -- * Creating call/cast protocol handlers
   , handleCall
   , handleCallIf
@@ -63,7 +63,7 @@ import Control.Applicative (Applicative)
 import Control.Distributed.Process hiding (call, say)
 import qualified Control.Distributed.Process as P (say)
 import Control.Distributed.Process.Platform.Internal.Types
-  (TerminateReason(..))
+  (ExitReason(..))
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import qualified Control.Distributed.Process.Platform.ManagedProcess.Server as Server
 import Control.Distributed.Process.Platform.Time
@@ -94,18 +94,18 @@ newtype RestrictedProcess s a = RestrictedProcess {
 
 -- | The result of a 'call' handler's execution.
 data Result a =
-    Reply     a                -- ^ reply with the given term
-  | Timeout   TimeInterval a   -- ^ reply with the given term and enter timeout
-  | Hibernate TimeInterval a   -- ^ reply with the given term and hibernate
-  | Stop      TerminateReason  -- ^ stop the process with the given reason
+    Reply     a              -- ^ reply with the given term
+  | Timeout   TimeInterval a -- ^ reply with the given term and enter timeout
+  | Hibernate TimeInterval a -- ^ reply with the given term and hibernate
+  | Stop      ExitReason     -- ^ stop the process with the given reason
   deriving (Typeable)
 
 -- | The result of a safe 'cast' handler's execution.
-data SafeAction =
-    SafeContinue                  -- ^ continue executing
-  | SafeTimeout   TimeInterval    -- ^ timeout if no messages are received
-  | SafeHibernate TimeInterval    -- ^ hibernate (i.e., sleep)
-  | SafeStop      TerminateReason -- ^ stop/terminate the server process
+data RestrictedAction =
+    RestrictedContinue               -- ^ continue executing
+  | RestrictedTimeout   TimeInterval -- ^ timeout if no messages are received
+  | RestrictedHibernate TimeInterval -- ^ hibernate (i.e., sleep)
+  | RestrictedStop      ExitReason   -- ^ stop/terminate the server process
 
 --------------------------------------------------------------------------------
 -- Handling state in RestrictedProcess execution environments                 --
@@ -145,33 +145,33 @@ noReply r = return r
 -- | Halt process execution during a call handler, without paying any attention
 -- to the expected return type.
 haltNoReply :: forall s r . (Serializable r)
-           => TerminateReason
+           => ExitReason
            -> RestrictedProcess s (Result r)
 haltNoReply r = noReply (Stop r)
 
 -- | Instructs the process to continue running and receiving messages.
-continue :: forall s . RestrictedProcess s SafeAction
-continue = return SafeContinue
+continue :: forall s . RestrictedProcess s RestrictedAction
+continue = return RestrictedContinue
 
 -- | Instructs the process to wait for incoming messages until 'TimeInterval'
 -- is exceeded. If no messages are handled during this period, the /timeout/
 -- handler will be called. Note that this alters the process timeout permanently
 -- such that the given @TimeInterval@ will remain in use until changed.
-timeoutAfter :: forall s. TimeInterval -> RestrictedProcess s SafeAction
-timeoutAfter d = return $ SafeTimeout d
+timeoutAfter :: forall s. TimeInterval -> RestrictedProcess s RestrictedAction
+timeoutAfter d = return $ RestrictedTimeout d
 
 -- | Instructs the process to /hibernate/ for the given 'TimeInterval'. Note
 -- that no messages will be removed from the mailbox until after hibernation has
 -- ceased. This is equivalent to calling @threadDelay@.
 --
-hibernate :: forall s. TimeInterval -> RestrictedProcess s SafeAction
-hibernate d = return $ SafeHibernate d
+hibernate :: forall s. TimeInterval -> RestrictedProcess s RestrictedAction
+hibernate d = return $ RestrictedHibernate d
 
 -- | Instructs the process to terminate, giving the supplied reason. If a valid
--- 'terminateHandler' is installed, it will be called with the 'TerminateReason'
+-- 'terminateHandler' is installed, it will be called with the 'ExitReason'
 -- returned from this call, along with the process state.
-stop :: forall s. TerminateReason -> RestrictedProcess s SafeAction
-stop r = return $ SafeStop r
+stop :: forall s. ExitReason -> RestrictedProcess s RestrictedAction
+stop r = return $ RestrictedStop r
 
 --------------------------------------------------------------------------------
 -- Wrapping handler expressions in Dispatcher and DeferredDispatcher          --
@@ -198,7 +198,7 @@ handleCallIf cond h = Server.handleCallIf cond (wrapCall h)
 -- that takes a handler which executes in 'RestrictedProcess'.
 --
 handleCast :: forall s a . (Serializable a)
-           => (a -> RestrictedProcess s SafeAction)
+           => (a -> RestrictedProcess s RestrictedAction)
            -> Dispatcher s
 handleCast = handleCastIf (Server.state (const True))
 
@@ -207,7 +207,7 @@ handleCast = handleCastIf (Server.state (const True))
 --
 handleCastIf :: forall s a . (Serializable a)
                 => Condition s a -- ^ predicate that must be satisfied for the handler to run
-                -> (a -> RestrictedProcess s SafeAction)
+                -> (a -> RestrictedProcess s RestrictedAction)
                 -- ^ an action yielding function over the process state and input message
                 -> Dispatcher s
 handleCastIf cond h = Server.handleCastIf cond (wrapHandler h)
@@ -216,48 +216,48 @@ handleCastIf cond h = Server.handleCastIf cond (wrapHandler h)
 -- that takes a handler which executes in 'RestrictedProcess'.
 --
 handleInfo :: forall s a. (Serializable a)
-           => (a -> RestrictedProcess s SafeAction)
+           => (a -> RestrictedProcess s RestrictedAction)
            -> DeferredDispatcher s
 -- cast and info look the same to a restricted process
 handleInfo h = Server.handleInfo (wrapHandler h)
 
 handleExit :: forall s a. (Serializable a)
-           => (a -> RestrictedProcess s SafeAction)
+           => (a -> RestrictedProcess s RestrictedAction)
            -> ExitSignalDispatcher s
 handleExit h = Server.handleExit $ \s _ a -> (wrapHandler h) s a
 
-handleTimeout :: forall s . (Delay -> RestrictedProcess s SafeAction)
+handleTimeout :: forall s . (Delay -> RestrictedProcess s RestrictedAction)
                          -> TimeoutHandler s
 handleTimeout h = \s d -> do
   (r, s') <- runRestricted s (h d)
   case r of
-    SafeContinue       -> Server.continue s'
-    (SafeTimeout   i)  -> Server.timeoutAfter i s'
-    (SafeHibernate i)  -> Server.hibernate    i s'
-    (SafeStop      r') -> Server.stop r'
+    RestrictedContinue       -> Server.continue s'
+    (RestrictedTimeout   i)  -> Server.timeoutAfter i s'
+    (RestrictedHibernate i)  -> Server.hibernate    i s'
+    (RestrictedStop      r') -> Server.stop r'
 
 --------------------------------------------------------------------------------
 -- Implementation                                                             --
 --------------------------------------------------------------------------------
 
 wrapHandler :: forall s a . (Serializable a)
-            => (a -> RestrictedProcess s SafeAction)
+            => (a -> RestrictedProcess s RestrictedAction)
             -> s
             -> a
             -> Process (ProcessAction s)
 wrapHandler h s a = do
   (r, s') <- runRestricted s (h a)
   case r of
-    SafeContinue       -> Server.continue s'
-    (SafeTimeout   i)  -> Server.timeoutAfter i s'
-    (SafeHibernate i)  -> Server.hibernate    i s'
-    (SafeStop      r') -> Server.stop r'
+    RestrictedContinue       -> Server.continue s'
+    (RestrictedTimeout   i)  -> Server.timeoutAfter i s'
+    (RestrictedHibernate i)  -> Server.hibernate    i s'
+    (RestrictedStop      r') -> Server.stop r'
 
 wrapCall :: forall s a b . (Serializable a, Serializable b)
             => (a -> RestrictedProcess s (Result b))
             -> s
             -> a
-            -> Process (ProcessReply s b)
+            -> Process (ProcessReply b s)
 wrapCall h s a = do
   (r, s') <- runRestricted s (h a)
   case r of

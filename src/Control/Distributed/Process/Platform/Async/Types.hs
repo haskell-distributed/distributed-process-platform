@@ -27,11 +27,11 @@ import GHC.Generics
 
 -- | An opaque handle that refers to an asynchronous operation.
 data Async a = Async {
-    hPoll             :: Process (AsyncResult a)
-  , hWait             :: Process (AsyncResult a)
-  , hWaitTimeout      :: TimeInterval -> Process (Maybe (AsyncResult a))
-  , hCancel           :: Process ()
-  , asyncWorker       :: ProcessId
+    hPoll        :: Process (AsyncResult a)
+  , hWait        :: Process (AsyncResult a)
+  , hWaitTimeout :: TimeInterval -> Process (Maybe (AsyncResult a))
+  , hCancel      :: Process ()
+  , asyncWorker  :: ProcessId
   }
 
 -- | A reference to an asynchronous action
