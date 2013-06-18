@@ -91,12 +91,54 @@ testUnregisterName reg = do
   fwobble <- lookupName reg "fwobble"
   fwobble `shouldBe` equalTo (Just self)
 
+testUnregisterUnknownName :: ProcessId -> Process ()
+testUnregisterUnknownName reg = do
+  result <- unregisterName reg "no.such.name"
+  result `shouldBe` equalTo UnregisterKeyNotFound
+
+testUnregisterAnothersName :: ProcessId -> Process ()
+testUnregisterAnothersName reg = do
+  (sp, rp) <- newChan
+  pid <- spawnLocal $ do
+    void $ addName reg "proc.name"
+    sendChan sp ()
+    (expect :: Process ()) >>= return
+  () <- receiveChan rp
+  found <- lookupName reg "proc.name"
+  found `shouldBe` equalTo (Just pid)
+  unreg <- unregisterName reg "proc.name"
+  unreg `shouldBe` equalTo UnregisterInvalidKey
+
+testProcessDeathHandling :: ProcessId -> Process ()
+testProcessDeathHandling reg = do
+  (sp, rp) <- newChan
+  pid <- spawnLocal $ do
+    void $ addName reg "proc.name.1"
+    void $ addName reg "proc.name.2"
+    sendChan sp ()
+    (expect :: Process ()) >>= return
+  () <- receiveChan rp
+  void $ monitor pid
+  forM_ [1..2 :: Int] $ \n -> do
+    let name = "proc.name." ++ (show n)
+    found <- lookupName reg name
+    found `shouldBe` equalTo (Just pid)
+  send pid ()
+  receiveWait [
+      match (\(ProcessMonitorNotification _ _ _) -> return ())
+    ]
+  forM_ [1..2 :: Int] $ \n -> do
+    let name = "proc.name." ++ (show n)
+    found <- lookupName reg name
+    found `shouldBe` equalTo Nothing
+
 tests :: NT.Transport  -> IO [Test]
 tests transport = do
   localNode <- newLocalNode transport initRemoteTable
   let testProc = withRegistry localNode
   return [
-        testGroup "Registering Named Processes" [
+        testGroup "Name Registration/Unregistration"
+        [
           testCase "Simple Registration"
            (delayedAssertion
             "expected the server to return the incremented state as 7"
@@ -109,6 +151,15 @@ tests transport = do
            (testProc myRegistry testDuplicateRegistrations)
         , testCase "Unregister Own Name"
            (testProc myRegistry testUnregisterName)
+        , testCase "Unregister Unknown Name"
+           (testProc myRegistry testUnregisterUnknownName)
+        , testCase "Unregister Someone Else's Name"
+           (testProc myRegistry testUnregisterAnothersName)
+        ]
+      , testGroup "Named Process Monitoring/Tracking"
+        [
+          testCase "Process Death Results In Unregistration"
+           (testProc myRegistry testProcessDeathHandling)
         ]
     ]
 

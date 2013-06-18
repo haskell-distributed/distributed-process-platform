@@ -100,6 +100,8 @@ import Data.Maybe (fromJust, isJust)
 import Data.Hashable
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as Map
+import Data.HashSet (HashSet)
+import qualified Data.HashSet as Set
 import Data.Typeable (Typeable)
 
 import GHC.Generics
@@ -183,6 +185,7 @@ data State k v =
     _names          :: !(HashMap k ProcessId)
   , _properties     :: !(HashMap (ProcessId, k) v)
   , _monitors       :: !(HashMap (ProcessId, k) KMRef)
+  , _monitoredPids  :: !(HashSet ProcessId)
   , _monitorIdCount :: !Integer
   }
   deriving (Typeable, Generic)
@@ -236,6 +239,7 @@ initIt _ () = return $ InitOk initState Infinity
     initState = State { _names          = Map.empty
                       , _properties     = Map.empty
                       , _monitors       = Map.empty
+                      , _monitoredPids  = Set.empty
                       , _monitorIdCount = (1 :: Integer)
                       } :: State k v
 
@@ -287,7 +291,7 @@ processDefinition =
   {
     apiHandlers =
        [
-         Restricted.handleCallIf
+         handleCallIf
               (input ((\(RegisterKeyReq (Key{..} :: Key k)) ->
                         keyType == KeyTypeAlias && (isJust keyScope))))
               handleRegisterName
@@ -300,23 +304,32 @@ processDefinition =
                         keyType == KeyTypeAlias && (isJust keyScope))))
               handleUnregisterName
        ]
-  , infoHandlers = [{- handleMonitorSignal -}]
+  , infoHandlers = [handleInfo handleMonitorSignal]
   } :: ProcessDefinition (State k v)
 
 handleRegisterName :: forall k v. (Keyable k, Serializable v)
-                   => RegisterKeyReq k
-                   -> RestrictedProcess (State k v) (Result RegisterKeyReply)
-handleRegisterName (RegisterKeyReq Key{..}) = do
-  state <- getState
+                   => State k v
+                   -> RegisterKeyReq k
+                   -> Process (ProcessReply RegisterKeyReply (State k v))
+handleRegisterName state (RegisterKeyReq Key{..}) = do
   let found = Map.lookup keyIdentity (state ^. names)
   case found of
     Nothing -> do
-      putState $ ((names ^: Map.insert keyIdentity (fromJust keyScope)) $ state)
-      Restricted.reply RegisteredOk
+      let pid  = fromJust keyScope
+      let refs = state ^. monitoredPids
+      refs' <- ensureMonitored pid refs
+      reply RegisteredOk $ ( (names ^: Map.insert keyIdentity pid)
+                           . (monitoredPids ^= refs')
+                           $ state)
     Just pid ->
       if (pid == (fromJust keyScope))
-         then Restricted.reply RegisteredOk
-         else Restricted.reply AlreadyRegistered
+         then reply RegisteredOk      state
+         else reply AlreadyRegistered state
+  where
+    ensureMonitored pid refs = do
+      case (Set.member pid refs) of
+        True  -> return refs
+        False -> monitor pid >> return (Set.insert pid refs)
 
 handleUnregisterName :: forall k v. (Keyable k, Serializable v)
                      => UnregisterKeyReq k
@@ -333,6 +346,15 @@ handleUnregisterName (UnregisterKeyReq Key{..}) = do
           putState $ ((names ^: Map.delete keyIdentity) $ state)
           Restricted.reply UnregisterOk
 
+handleMonitorSignal :: forall k v. (Keyable k, Serializable v)
+                    => State k v
+                    -> ProcessMonitorNotification
+                    -> Process (ProcessAction (State k v))
+handleMonitorSignal state (ProcessMonitorNotification _ pid _) = do
+  let regNames  = state ^. names
+  let diedNames = Map.filter (== pid) regNames
+  continue $ ((names ^= Map.difference regNames diedNames) $ state)
+
 findName :: forall k v. (Keyable k, Serializable v)
          => Key k
          -> State k v
@@ -347,6 +369,9 @@ properties = accessor _properties (\ps st -> st { _properties = ps })
 
 monitors :: forall k v. Accessor (State k v) (HashMap (ProcessId, k) KMRef)
 monitors = accessor _monitors (\ms st -> st { _monitors = ms })
+
+monitoredPids :: forall k v. Accessor (State k v) (HashSet ProcessId)
+monitoredPids = accessor _monitoredPids (\mp st -> st { _monitoredPids = mp })
 
 monitorIdCount :: forall k v. Accessor (State k v) Integer
 monitorIdCount = accessor _monitorIdCount (\i st -> st { _monitorIdCount = i })
