@@ -8,7 +8,7 @@ import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
 
-import Control.Distributed.Process.Platform hiding (__remoteTable, monitor)
+import Control.Distributed.Process.Platform hiding (__remoteTable, monitor, send)
 import qualified Control.Distributed.Process.Platform (__remoteTable)
 import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process.Platform.Call

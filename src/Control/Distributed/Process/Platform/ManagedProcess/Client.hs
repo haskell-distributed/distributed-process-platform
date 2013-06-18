@@ -3,7 +3,7 @@
 
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Control.Distributed.Process.Platform.ManagedProcess.Server
+-- Module      :  Control.Distributed.Process.Platform.ManagedProcess.Client
 -- Copyright   :  (c) Tim Watson 2012 - 2013
 -- License     :  BSD3 (see the file LICENSE)
 --
@@ -36,8 +36,7 @@ import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import qualified Control.Distributed.Process.Platform.ManagedProcess.Internal.Types as T
 import Control.Distributed.Process.Platform.Internal.Primitives hiding (monitor)
 import Control.Distributed.Process.Platform.Internal.Types
-  ( Recipient(..)
-  , ExitReason(..)
+  ( ExitReason(..)
   , Shutdown(..)
   )
 import Control.Distributed.Process.Platform.Time
@@ -159,48 +158,4 @@ syncSafeCallChan :: forall s a b . (Addressable s, Serializable a, Serializable 
 syncSafeCallChan server msg = do
   rp <- callChan server msg
   awaitResponse server [ matchChan rp (return . Right) ]
-
--- note [rpc calls]
--- One problem with using plain expect/receive primitives to perform a
--- synchronous (round trip) call is that a reply matching the expected type
--- could come from anywhere! The Call.hs module uses a unique integer tag to
--- distinguish between inputs but this is easy to forge, and forces all callers
--- to maintain a tag pool, which is quite onerous.
---
--- Here, we use a private (internal) tag based on a 'MonitorRef', which is
--- guaranteed to be unique per calling process (in the absence of mallicious
--- peers). This is handled throughout the roundtrip, such that the reply will
--- either contain the CallId (i.e., the ame 'MonitorRef' with which we're
--- tracking the server process) or we'll see the server die.
---
--- Of course, the downside to all this is that the monitoring and receiving
--- clutters up your mailbox, and if your mailbox is extremely full, could
--- incur delays in delivery. The callAsync function provides a neat
--- work-around for that, relying on the insulation provided by Async.
-
-initCall :: forall s a b . (Addressable s, Serializable a, Serializable b)
-         => s -> a -> Process (CallRef b)
-initCall sid msg = do
-  (Just pid) <- resolve sid
-  mRef <- monitor pid
-  self <- getSelfPid
-  let cRef = makeRef (Pid self) mRef in do
-    sendTo sid $ ((CallMessage msg cRef) :: T.Message a b)
-    return cRef
-
-waitResponse :: forall b. (Serializable b)
-             => Maybe TimeInterval
-             -> CallRef b
-             -> Process (Maybe (Either ExitReason b))
-waitResponse mTimeout cRef =
-  let (_, mRef) = unCaller cRef
-      matchers  = [ matchIf (\((CallResponse _ ref) :: CallResponse b) -> ref == mRef)
-                            (\((CallResponse m _) :: CallResponse b) -> return (Right m))
-                  , matchIf (\(ProcessMonitorNotification ref _ _) -> ref == mRef)
-                      (\(ProcessMonitorNotification _ _ r) -> return (Left (err r)))
-                  ]
-      err r     = ExitOther $ show r in
-    case mTimeout of
-      (Just ti) -> finally (receiveTimeout (asTimeout ti) matchers) (unmonitor mRef)
-      Nothing   -> finally (receiveWait matchers >>= return . Just) (unmonitor mRef)
 
