@@ -103,13 +103,6 @@ import Data.Maybe (fromJust, isJust)
 import Data.Hashable
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as Map
-import Data.Sequence
-  ( Seq
-  , ViewL(EmptyL, (:<))
-  , (<|)
-  , (><)
-  , filter)
-import qualified Data.Sequence as Seq
 import Data.Typeable (Typeable)
 
 import GHC.Generics
@@ -190,7 +183,7 @@ data KMRef = KMRef { ref  :: !RegKeyMonitorRef
 data State k v =
   State
   {
-    _names          :: !(Seq (Key k, ProcessId))
+    _names          :: !(HashMap k ProcessId)
   , _properties     :: !(HashMap (ProcessId, k) v)
   , _monitors       :: !(HashMap (ProcessId, k) KMRef)
   , _monitorIdCount :: !Integer
@@ -243,7 +236,7 @@ initIt :: forall k v. (Keyable k, Serializable v)
        -> InitHandler () (State k v)
 initIt _ () = return $ InitOk initState Infinity
   where
-    initState = State { _names          = Seq.empty
+    initState = State { _names          = Map.empty
                       , _properties     = Map.empty
                       , _monitors       = Map.empty
                       , _monitorIdCount = (1 :: Integer)
@@ -309,7 +302,7 @@ processDefinition =
   {
     apiHandlers =
        [
-         handleCallIf
+         Restricted.handleCallIf
               (input ((\(RegisterKeyReq (Key{..} :: Key k)) ->
                         keyType == KeyTypeAlias && (isJust keyScope))))
               handleRegisterName
@@ -326,57 +319,42 @@ processDefinition =
   } :: ProcessDefinition (State k v)
 
 handleRegisterName :: forall k v. (Keyable k, Serializable v)
-                   => State k v
-                   -> RegisterKeyReq k
-                   -> Process (ProcessReply RegisterKeyReply (State k v))
-handleRegisterName state (RegisterKeyReq key) = do
-  let (prefix, suffix) = splitNames state key
-  case (Seq.viewl suffix) of
-    EmptyL -> do
-      let state' = ((names ^= ((key, (fromJust scope)) <| prefix) >< suffix)
-                    $ state)
-      reply RegisteredOk state'
-    (_, pid) :< _ ->
-      if (pid == (fromJust scope))
-         then reply RegisteredOk      state
-         else reply AlreadyRegistered state
-  where
-    scope = keyScope key
+                   => RegisterKeyReq k
+                   -> RestrictedProcess (State k v) (Result RegisterKeyReply)
+handleRegisterName (RegisterKeyReq Key{..}) = do
+  state <- getState
+  let found = Map.lookup keyIdentity (state ^. names)
+  case found of
+    Nothing -> do
+      putState $ ((names ^: Map.insert keyIdentity (fromJust keyScope)) $ state)
+      Restricted.reply RegisteredOk
+    Just pid ->
+      if (pid == (fromJust keyScope))
+         then Restricted.reply RegisteredOk
+         else Restricted.reply AlreadyRegistered
 
 handleUnregisterName :: forall k v. (Keyable k, Serializable v)
                      => UnregisterKeyReq k
                      -> RestrictedProcess (State k v) (Result UnregisterKeyReply)
-handleUnregisterName (UnregisterKeyReq key@Key{..}) = do
+handleUnregisterName (UnregisterKeyReq Key{..}) = do
   state <- getState
-  let (prefix, suffix) = splitNames state key
-  case (Seq.viewl suffix) of
-    EmptyL    -> Restricted.reply UnregisterKeyNotFound
-    (_, scope) :< rest -> do
-      case (scope /= (fromJust keyScope)) of
+  let entry = Map.lookup keyIdentity (state ^. names)
+  case entry of
+    Nothing  -> Restricted.reply UnregisterKeyNotFound
+    Just pid ->
+      case (pid /= (fromJust keyScope)) of
         True  -> Restricted.reply UnregisterInvalidKey
         False -> do
-          modifyState (names ^= prefix >< rest)
+          putState $ ((names ^: Map.delete keyIdentity) $ state)
           Restricted.reply UnregisterOk
 
 findName :: forall k v. (Keyable k, Serializable v)
          => Key k
          -> State k v
          -> Maybe ProcessId
-findName key state =
-  let (_, suffix) = splitNames state key in
-  case (Seq.viewl suffix) of
-    EmptyL        -> Nothing
-    (_, pid) :< _ -> Just pid
+findName Key{..} state = Map.lookup keyIdentity (state ^. names)
 
-splitNames :: forall k v. (Keyable k, Serializable v)
-           => State k v
-           -> Key k
-           -> ((Seq (Key k, ProcessId)), (Seq (Key k, ProcessId)))
-splitNames state k =
-  let eq' = (\(k', _) -> (keyIdentity k') == (keyIdentity k)) in
-  Seq.breakl eq' (state ^. names)
-
-names :: forall k v. Accessor (State k v) (Seq (Key k, ProcessId))
+names :: forall k v. Accessor (State k v) (HashMap k ProcessId)
 names = accessor _names (\n' st -> st { _names = n' })
 
 properties :: forall k v. Accessor (State k v) (HashMap (ProcessId, k) v)
