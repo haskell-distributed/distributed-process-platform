@@ -244,34 +244,22 @@ initIt _ () = return $ InitOk initState Infinity
 --------------------------------------------------------------------------------
 
 -- | Associate the current process with the given (unique) key.
-addName :: (Addressable a, Keyable k)
-        => a
-        -> k
-        -> Process RegisterKeyReply
+addName :: (Addressable a, Keyable k) => a -> k -> Process RegisterKeyReply
 addName s n = getSelfPid >>= registerName s n
 
 -- | Associate the given (non-unique) property with the current process.
 addProperty :: (Serializable a, Keyable k, Serializable v)
-            => a
-            -> Key k
-            -> v
-            -> Process ()
+            => a -> Key k -> v -> Process ()
 addProperty = undefined
 
 -- | Register the item at the given address.
 registerName :: (Addressable a, Keyable k)
-             => a
-             -> k
-             -> ProcessId
-             -> Process RegisterKeyReply
+             => a -> k -> ProcessId -> Process RegisterKeyReply
 registerName s n p = call s $ RegisterKeyReq (Key n KeyTypeAlias $ Just p)
 
 -- | Register an item at the given address and associate it with a value.
 registerValue :: (Addressable a, Keyable k, Serializable v)
-              => a
-              -> k
-              -> v
-              -> Process ()
+              => a -> k -> v -> Process ()
 registerValue = undefined
 
 unregisterName :: (Addressable a, Keyable k)
