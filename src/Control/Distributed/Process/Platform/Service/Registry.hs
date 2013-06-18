@@ -202,6 +202,10 @@ data LookupKeyReq k = LookupKeyReq !(Key k)
   deriving (Typeable, Generic)
 instance (Serializable k) => Binary (LookupKeyReq k) where
 
+data RegNamesReq = RegNamesReq !ProcessId
+  deriving (Typeable, Generic)
+instance Binary RegNamesReq where
+
 data UnregisterKeyReq k = UnregisterKeyReq !(Key k)
   deriving (Typeable, Generic)
 instance (Serializable k) => Binary (UnregisterKeyReq k) where
@@ -280,6 +284,12 @@ lookupName :: (Addressable a, Keyable k)
            -> Process (Maybe ProcessId)
 lookupName s n = call s $ LookupKeyReq (Key n KeyTypeAlias Nothing)
 
+registeredNames :: (Addressable a, Keyable k)
+                => a
+                -> ProcessId
+                -> Process [k]
+registeredNames s p = call s $ RegNamesReq p
+
 --------------------------------------------------------------------------------
 -- Server Process                                                             --
 --------------------------------------------------------------------------------
@@ -303,6 +313,7 @@ processDefinition =
               (input ((\(UnregisterKeyReq (Key{..} :: Key k)) ->
                         keyType == KeyTypeAlias && (isJust keyScope))))
               handleUnregisterName
+       , Restricted.handleCall handleRegNamesLookup
        ]
   , infoHandlers = [handleInfo handleMonitorSignal]
   } :: ProcessDefinition (State k v)
@@ -345,6 +356,17 @@ handleUnregisterName (UnregisterKeyReq Key{..}) = do
         False -> do
           putState $ ((names ^: Map.delete keyIdentity) $ state)
           Restricted.reply UnregisterOk
+
+handleRegNamesLookup :: forall k v. (Keyable k, Serializable v)
+                     => RegNamesReq
+                     -> RestrictedProcess (State k v) (Result [k])
+handleRegNamesLookup (RegNamesReq p) = do
+  state <- getState
+  Restricted.reply $ Map.foldlWithKey' (acc p) [] (state ^. names)
+  where
+    acc pid ns n pid'
+      | pid == pid' = (n:ns)
+      | otherwise   = ns
 
 handleMonitorSignal :: forall k v. (Keyable k, Serializable v)
                     => State k v

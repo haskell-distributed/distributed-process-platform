@@ -14,6 +14,7 @@ import Control.Distributed.Process.Platform.Service.Registry
   , registerName
   , unregisterName
   , lookupName
+  , registeredNames
   , RegisterKeyReply(..)
   , UnregisterKeyReply(..)
   )
@@ -119,10 +120,8 @@ testProcessDeathHandling reg = do
     (expect :: Process ()) >>= return
   () <- receiveChan rp
   void $ monitor pid
-  forM_ [1..2 :: Int] $ \n -> do
-    let name = "proc.name." ++ (show n)
-    found <- lookupName reg name
-    found `shouldBe` equalTo (Just pid)
+  regNames <- registeredNames reg pid
+  regNames `shouldBe` equalTo ["proc.name.1", "proc.name.2"]
   send pid ()
   receiveWait [
       match (\(ProcessMonitorNotification _ _ _) -> return ())
@@ -131,6 +130,8 @@ testProcessDeathHandling reg = do
     let name = "proc.name." ++ (show n)
     found <- lookupName reg name
     found `shouldBe` equalTo Nothing
+  regNames' <- registeredNames reg pid
+  regNames' `shouldBe` equalTo ([] :: [String])
 
 tests :: NT.Transport  -> IO [Test]
 tests transport = do
