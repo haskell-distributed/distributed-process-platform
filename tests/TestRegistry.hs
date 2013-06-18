@@ -10,6 +10,9 @@ import Control.Distributed.Process.Node
 import Control.Distributed.Process.Platform.Service.Registry
   ( Registry(..)
   , Keyable
+  , KeyUpdateEventMask(..)
+  , KeyUpdateEvent(..)
+  , RegistryKeyMonitorNotification(..)
   , addName
   , registerName
   , unregisterName
@@ -20,6 +23,7 @@ import Control.Distributed.Process.Platform.Service.Registry
   )
 import qualified Control.Distributed.Process.Platform.Service.Registry as Registry
 import Control.Distributed.Process.Platform.Test
+import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process.Serializable
 import Control.Monad (void, forM_)
 import Control.Rematch
@@ -133,6 +137,24 @@ testProcessDeathHandling reg = do
   regNames' <- registeredNames reg pid
   regNames' `shouldBe` equalTo ([] :: [String])
 
+testMonitorName :: ProcessId -> Process ()
+testMonitorName reg = do
+  (sp, rp) <- newChan
+  pid <- spawnLocal $ do
+    void $ addName reg "proc.name.1"
+    void $ addName reg "proc.name.2"
+    sendChan sp ()
+    (expect :: Process ()) >>= return
+  () <- receiveChan rp
+  mRef <- Registry.monitorName reg "proc.name.2"
+  send pid ()
+  res <- receiveTimeout (after 2 Seconds) [
+      matchIf (\(RegistryKeyMonitorNotification k ref _) ->
+                k == "proc.name.2" && ref == mRef)
+              (\(RegistryKeyMonitorNotification _ _ ev) -> return ev)
+    ]
+  res `shouldBe` equalTo (Just (KeyOwnerDied "proc.name.2" DiedNormal))
+
 tests :: NT.Transport  -> IO [Test]
 tests transport = do
   localNode <- newLocalNode transport initRemoteTable
@@ -161,6 +183,8 @@ tests transport = do
         [
           testCase "Process Death Results In Unregistration"
            (testProc myRegistry testProcessDeathHandling)
+        , testCase "Monitoring Name Changes"
+           (testProc myRegistry testMonitorName)
         ]
     ]
 
