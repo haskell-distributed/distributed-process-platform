@@ -39,7 +39,7 @@ import Prelude hiding (init)
 
 type Queue = PriorityQ Int P.Message
 type TimeoutSpec = (Delay, Maybe (TimerRef, (STM ())))
-data TimeoutAction s = Stop ExitReason | Go Delay s
+data TimeoutAction s = Stop s ExitReason | Go Delay s
 
 precvLoop :: PrioritisedProcessDefinition s -> s -> Delay -> Process ExitReason
 precvLoop ppDef pState recvDelay = do
@@ -86,8 +86,8 @@ recvQueue p s t q =
         -- as a side effect, this check will cancel the timer
         timedOut <- checkTimer pState tSpec h
         case timedOut of
-          Stop r   -> return $ (ProcessStop r, (fst tSpec), queue)
-          Go t' s' -> do
+          Stop s' r -> return $ (ProcessStopping s' r, (fst tSpec), queue)
+          Go t' s'  -> do
             -- checkTimer could've run `timeoutHandler', which changes s
             case (dequeue queue) of
               Nothing -> do
@@ -262,7 +262,8 @@ checkTimer pState spec handler = let delay = fst spec in do
       act <- handler pState delay
       case act of
         ProcessTimeout   t' s' -> return $ Go (Delay t') s'
-        ProcessStop      r     -> return $ Stop r
+        ProcessStop      r     -> return $ Stop pState r
+        ProcessStopping  s' r  -> return $ Stop s' r
         -- TODO handle ProcessStopping......
         ProcessHibernate d' s' -> block d' >> go spec s'
         ProcessContinue  s'    -> go spec s'
