@@ -191,6 +191,7 @@ recvLoop pDef pState recvDelay =
         (ProcessTimeout t' s')   -> recvLoop pDef s' (Delay t')
         (ProcessHibernate d' s') -> block d' >> recvLoop pDef s' recvDelay
         (ProcessStop r) -> handleStop pState r >> return (r :: ExitReason)
+        (ProcessStopping s' r) -> handleStop s' r >> return (r :: ExitReason)
   where
     matchAux :: UnhandledMessagePolicy
              -> s
@@ -262,6 +263,7 @@ checkTimer pState spec handler = let delay = fst spec in do
       case act of
         ProcessTimeout   t' s' -> return $ Go (Delay t') s'
         ProcessStop      r     -> return $ Stop r
+        -- TODO handle ProcessStopping......
         ProcessHibernate d' s' -> block d' >> go spec s'
         ProcessContinue  s'    -> go spec s'
   where

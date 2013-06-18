@@ -4,6 +4,7 @@
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE StandaloneDeriving         #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
 
 -- | Types used throughout the ManagedProcess framework
 module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
@@ -37,20 +38,22 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
   , CallId
   , CallRef(..)
   , makeRef
+  , initCall
+  , unsafeInitCall
+  , waitResponse
   ) where
 
 import Control.Distributed.Process hiding (Message)
 import qualified Control.Distributed.Process as P (Message)
 import Control.Distributed.Process.Serializable
-import Control.Distributed.Process.Platform.Internal.Primitives
-  ( Addressable(..)
-  )
 import Control.Distributed.Process.Platform.Internal.Types
   ( Recipient(..)
   , ExitReason(..)
+  , Addressable(..)
+  , NFSerializable
   )
 import Control.Distributed.Process.Platform.Time
-
+import Control.DeepSeq (NFData)
 import Data.Binary hiding (decode)
 import Data.Typeable (Typeable)
 
@@ -67,6 +70,7 @@ type CallId = MonitorRef
 newtype CallRef a = CallRef { unCaller :: (Recipient, CallId) }
   deriving (Eq, Show, Typeable, Generic)
 instance Serializable a => Binary (CallRef a) where
+instance NFData a => NFData (CallRef a) where
 
 makeRef :: forall a . (Serializable a) => Recipient -> CallId -> CallRef a
 makeRef r c = CallRef (r, c)
@@ -74,6 +78,7 @@ makeRef r c = CallRef (r, c)
 instance Addressable (CallRef a) where
   resolve (CallRef (r, _))            = resolve r
   sendTo  (CallRef (client, tag)) msg = sendTo client (CallResponse msg tag)
+  unsafeSendTo (CallRef (c, tag)) msg = unsafeSendTo c (CallResponse msg tag)
 
 data Message a b =
     CastMessage a
@@ -82,6 +87,7 @@ data Message a b =
   deriving (Typeable, Generic)
 
 instance (Serializable a, Serializable b) => Binary (Message a b) where
+instance (NFSerializable a, NFSerializable b) => NFData (Message a b) where
 deriving instance (Eq a, Eq b) => Eq (Message a b)
 deriving instance (Show a, Show b) => Show (Message a b)
 
@@ -89,6 +95,7 @@ data CallResponse a = CallResponse a CallId
   deriving (Typeable, Generic)
 
 instance Serializable a => Binary (CallResponse a)
+instance NFSerializable a => NFData (CallResponse a)
 deriving instance Eq a => Eq (CallResponse a)
 deriving instance Show a => Show (CallResponse a)
 
@@ -130,7 +137,6 @@ data Condition s m =
     Condition (s -> m -> Bool)  -- ^ predicated on the process state /and/ the message
   | State     (s -> Bool)       -- ^ predicated on the process state only
   | Input     (m -> Bool)       -- ^ predicated on the input message only
-
 
 -- | An expression used to handle a /call/ message.
 type CallHandler s a b = s -> a -> Process (ProcessReply b s)
@@ -260,4 +266,60 @@ data ProcessDefinition s = ProcessDefinition {
   , shutdownHandler :: ShutdownHandler s -- ^ a function that is run just before the process exits
   , unhandledMessagePolicy :: UnhandledMessagePolicy -- ^ how to deal with unhandled messages
   }
+
+-- note [rpc calls]
+-- One problem with using plain expect/receive primitives to perform a
+-- synchronous (round trip) call is that a reply matching the expected type
+-- could come from anywhere! The Call.hs module uses a unique integer tag to
+-- distinguish between inputs but this is easy to forge, and forces all callers
+-- to maintain a tag pool, which is quite onerous.
+--
+-- Here, we use a private (internal) tag based on a 'MonitorRef', which is
+-- guaranteed to be unique per calling process (in the absence of mallicious
+-- peers). This is handled throughout the roundtrip, such that the reply will
+-- either contain the CallId (i.e., the ame 'MonitorRef' with which we're
+-- tracking the server process) or we'll see the server die.
+--
+-- Of course, the downside to all this is that the monitoring and receiving
+-- clutters up your mailbox, and if your mailbox is extremely full, could
+-- incur delays in delivery. The callAsync function provides a neat
+-- work-around for that, relying on the insulation provided by Async.
+
+-- TODO: Generify this /call/ API and use it in Call.hs to avoid tagging
+
+initCall :: forall s a b . (Addressable s, Serializable a, Serializable b)
+         => s -> a -> Process (CallRef b)
+initCall sid msg = do
+  (Just pid) <- resolve sid
+  mRef <- monitor pid
+  self <- getSelfPid
+  let cRef = makeRef (Pid self) mRef in do
+    sendTo pid $ ((CallMessage msg cRef) :: Message a b)
+    return cRef
+
+unsafeInitCall :: forall s a b . (Addressable s, NFSerializable a, NFSerializable b)
+         => s -> a -> Process (CallRef b)
+unsafeInitCall sid msg = do
+  (Just pid) <- resolve sid
+  mRef <- monitor pid
+  self <- getSelfPid
+  let cRef = makeRef (Pid self) mRef in do
+    unsafeSendTo pid $ ((CallMessage msg cRef) :: Message a b)
+    return cRef
+
+waitResponse :: forall b. (Serializable b)
+             => Maybe TimeInterval
+             -> CallRef b
+             -> Process (Maybe (Either ExitReason b))
+waitResponse mTimeout cRef =
+  let (_, mRef) = unCaller cRef
+      matchers  = [ matchIf (\((CallResponse _ ref) :: CallResponse b) -> ref == mRef)
+                            (\((CallResponse m _) :: CallResponse b) -> return (Right m))
+                  , matchIf (\(ProcessMonitorNotification ref _ _) -> ref == mRef)
+                      (\(ProcessMonitorNotification _ _ r) -> return (Left (err r)))
+                  ]
+      err r     = ExitOther $ show r in
+    case mTimeout of
+      (Just ti) -> finally (receiveTimeout (asTimeout ti) matchers) (unmonitor mRef)
+      Nothing   -> finally (receiveWait matchers >>= return . Just) (unmonitor mRef)
 

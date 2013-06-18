@@ -6,13 +6,21 @@ import Control.Distributed.Process.Platform.Internal.Queue.SeqQ ( SeqQ )
 import qualified Control.Distributed.Process.Platform.Internal.Queue.PriorityQ as PQ
 
 import Control.Rematch hiding (on)
+import Control.Rematch.Run
 import Data.Function (on)
 import Data.List
 import Test.Framework as TF (defaultMain, testGroup, Test)
 import Test.Framework.Providers.HUnit
 import Test.Framework.Providers.QuickCheck2 (testProperty)
+import Test.HUnit (Assertion, assertFailure)
 
 import Prelude
+
+expectThat :: a -> Matcher a -> Assertion
+expectThat a matcher = case res of
+  MatchSuccess -> return ()
+  (MatchFailure msg) -> assertFailure msg
+  where res = runMatch matcher a
 
 -- NB: these tests/properties are not meant to be complete, but rather
 -- they exercise the small number of behaviours that we actually use!
@@ -64,12 +72,12 @@ tests = [
      ],
      testGroup "FIFO Queue Tests" [
         testCase "New Queue Should Be Empty"
-          (expect (FIFO.isEmpty $ FIFO.empty) $ equalTo True),
+          (expectThat (FIFO.isEmpty $ FIFO.empty) $ equalTo True),
         testCase "Singleton Queue Should Contain One Element"
-          (expect (FIFO.dequeue $ FIFO.singleton "hello") $
+          (expectThat (FIFO.dequeue $ FIFO.singleton "hello") $
              equalTo $ Just ("hello", FIFO.empty)),
         testCase "Dequeue Empty Queue Should Be Nothing"
-          (expect (FIFO.dequeue $ (FIFO.empty :: SeqQ ())) $
+          (expectThat (FIFO.dequeue $ (FIFO.empty :: SeqQ ())) $
             is (Nothing :: Maybe ((), SeqQ ()))),
         testProperty "Enqueue/Dequeue should respect FIFO order"
             prop_fifo_enqueue,

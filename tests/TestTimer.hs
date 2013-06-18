@@ -1,6 +1,3 @@
-{-# LANGUAGE DeriveDataTypeable        #-}
-{-# LANGUAGE TemplateHaskell           #-}
-
 module Main where
 
 #if ! MIN_VERSION_base(4,6,0)
@@ -13,7 +10,6 @@ import Control.Concurrent.MVar
   , takeMVar
   , withMVar
   )
--- import Control.Applicative ((<$>), (<*>), pure, (<|>))
 import qualified Network.Transport as NT (Transport)
 import Network.Transport.TCP()
 import Control.Distributed.Process.Platform.Time
@@ -35,7 +31,8 @@ testSendAfter result =
   pid <- getSelfPid
   _ <- sendAfter delay pid Ping
   hdInbox <- receiveTimeout (asTimeout (seconds 2)) [
-                        match (\m@(Ping) -> return m) ]
+                      match (\m@(Ping) -> return m)
+                    ]
   case hdInbox of
       Just Ping -> stash result True
       Nothing   -> stash result False
@@ -59,15 +56,16 @@ testCancelTimer :: TestResult Bool -> Process ()
 testCancelTimer result = do
   let delay = milliSeconds 50
   pid <- periodically delay noop
-  ref <- monitor pid    
-  
-  sleep $ seconds 1      
+  ref <- monitor pid
+
+  sleep $ seconds 1
   cancelTimer pid
-      
+
   _ <- receiveWait [
-        match (\(ProcessMonitorNotification ref' pid' _) ->
-                stash result $ ref == ref' && pid == pid') ]
-        
+          match (\(ProcessMonitorNotification ref' pid' _) ->
+                  stash result $ ref == ref' && pid == pid')
+        ]
+
   return ()
 
 testPeriodicSend :: TestResult Bool -> Process ()
@@ -79,7 +77,7 @@ testPeriodicSend result = do
   liftIO $ putMVar result True
   where listener :: Int -> TimerRef -> Process ()
         listener n tRef | n > 10    = cancelTimer tRef
-                        | otherwise = waitOne >> listener (n + 1) tRef  
+                        | otherwise = waitOne >> listener (n + 1) tRef
         -- get a single tick, blocking indefinitely
         waitOne :: Process ()
         waitOne = do
@@ -88,9 +86,9 @@ testPeriodicSend result = do
 
 testTimerReset :: TestResult Int -> Process ()
 testTimerReset result = do
-  let delay = seconds 10  
+  let delay = seconds 10
   counter <- liftIO $ newEmptyMVar
-  
+
   listenerPid <- spawnLocal $ do
       stash counter 0
       -- we continually listen for 'ticks' and increment counter for each
@@ -182,4 +180,3 @@ timerTests transport = do
 
 main :: IO ()
 main = testMain $ timerTests
-  
