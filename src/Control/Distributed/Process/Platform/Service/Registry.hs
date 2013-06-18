@@ -46,8 +46,7 @@ import Control.Distributed.Process.Platform.ManagedProcess
   , UnhandledMessagePolicy(Drop)
   )
 import qualified Control.Distributed.Process.Platform.ManagedProcess as MP
-  ( serve
-  , call
+  ( pserve
   )
 import Control.Distributed.Process.Platform.ManagedProcess.Server
   ( handleCast
@@ -82,9 +81,6 @@ import qualified Control.Distributed.Process.Platform.ManagedProcess.Server.Rest
 -- import Control.Distributed.Process.Platform.ManagedProcess.Server
 import Control.Distributed.Process.Platform.Time
 import Control.Exception (SomeException, Exception, throwIO)
-
-import Control.Monad.Error
-
 import Data.Accessor
   ( Accessor
   , accessor
@@ -94,8 +90,6 @@ import Data.Accessor
   , (^.)
   )
 import Data.Binary
-import Data.Foldable (find, foldlM, toList)
-import Data.List (foldl')
 import Data.Maybe (fromJust, isJust)
 import Data.Hashable
 import Data.HashMap.Strict (HashMap)
@@ -233,7 +227,7 @@ start reg = spawnLocal $ run reg
 run :: forall k v. (Keyable k, Serializable v)
     => Registry k v
     -> Process ()
-run reg = MP.serve () (initIt reg) processDefinition
+run reg = MP.pserve () (initIt reg) serverDefinition
 
 initIt :: forall k v. (Keyable k, Serializable v)
        => Registry k v
@@ -293,6 +287,15 @@ registeredNames s p = call s $ RegNamesReq p
 --------------------------------------------------------------------------------
 -- Server Process                                                             --
 --------------------------------------------------------------------------------
+
+serverDefinition :: forall k v. (Keyable k, Serializable v)
+                 => PrioritisedProcessDefinition (State k v)
+serverDefinition = prioritised processDefinition regPriorities
+  where
+    regPriorities :: [DispatchPriority (State k v)]
+    regPriorities = [
+        prioritiseInfo_ (\(ProcessMonitorNotification _ _ _) -> setPriority 100)
+      ]
 
 processDefinition :: forall k v. (Keyable k, Serializable v)
                   => ProcessDefinition (State k v)
