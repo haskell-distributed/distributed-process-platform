@@ -24,9 +24,6 @@ module Control.Distributed.Process.Platform.Service.Registry where
 import Control.Distributed.Process hiding (call)
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Internal.Primitives hiding (monitor)
-import Control.Distributed.Process.Platform.Internal.Types
-  ( ExitReason(..)
-  )
 import Control.Distributed.Process.Platform.ManagedProcess
   ( call
   , handleCall
@@ -210,7 +207,7 @@ data UnregisterKeyReply =
     UnregisterOk
   | UnregisterInvalidKey
   | UnregisterKeyNotFound
-  deriving (Typeable, Generic)
+  deriving (Typeable, Generic, Eq, Show)
 instance Binary UnregisterKeyReply where
 
 data Registry k v = LocalRegistry | RemoteRegistry
