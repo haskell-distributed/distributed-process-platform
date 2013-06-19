@@ -18,6 +18,29 @@
 -- Stability   :  experimental
 -- Portability :  non-portable (requires concurrency)
 --
+-- [Subscribing To Registry Events]
+--
+-- It is possible to monitor a registry for changes and be informed whenever
+-- changes take place. All subscriptions are /key based/, which means that
+-- you can subscribe to name or property changes for any process, though any
+-- property changes matching the key you've subscribed to will trigger a
+-- notification (i.e., regardless of the process to which the property belongs).
+--
+-- The different events are defined by the 'KeyUpdateEvent' type.
+--
+-- Processes subscribe to registry events using @monitorName@ or its counterpart
+-- @monitorProperty@. If the operation succeeds, this will evaluate to an
+-- opaque /reference/ which can be used in subsequently handling any received
+-- notifications, which will be delivered to the subscriber's mailbox as
+-- @RegistryKeyMonitorNotification keyIdentity opaqueRef event@, where @event@
+-- has the type 'KeyUpdateEvent'.
+--
+-- Subscribers can filter the types of event they receive by using the lower
+-- level @monitor@ function (defined in /this/ module - not the one defined
+-- in distributed-process' Primitives) and passing a list of
+-- 'KeyUpdateEventMask'. Without these filters in place, a monitor event will
+-- be fired for /every/ pertinent change.
+--
 -----------------------------------------------------------------------------
 module Control.Distributed.Process.Platform.Service.Registry
   ( -- * Registry Keys
