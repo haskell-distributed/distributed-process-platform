@@ -459,21 +459,33 @@ notifyListeners :: forall k v. (Keyable k, Serializable v)
                 -> DiedReason
                 -> Process (HashMap k ProcessId, HashMap k ProcessId)
 notifyListeners state pid dr = do
-  let regNames    = state ^. names
-  let monitored   = state ^. monitors
   let diedNames   = Map.filter (== pid) regNames
-  let subscribers = Map.filterWithKey (\k _ -> Map.member k diedNames) monitored
+  let subscribers = Map.filterWithKey (\k _ -> Map.member k diedNames) monRefs
+  let propSubscribers =
+        Map.filterWithKey (\k _ -> Map.member (pid, k) props) monRefs
   parent <- getSelfPid
-  void $ spawnLocal $ do
-    forM_ (Map.toList subscribers) $ \(kIdent, KMRef{..}) -> do
-      case mask of
-        Nothing -> do
-          let kEv  = KeyOwnerDied { key = kIdent, diedReason = dr }
-          let mRef = RegistryKeyMonitorNotification kIdent ref kEv
-          sendTo ref mRef
-        Just _ ->
-          kill parent "NOT IMPLEMENTED YET"
+  forM_ (Map.toList subscribers) $ \(kIdent, KMRef{..}) -> do
+    case mask of
+      Nothing -> do
+        let kEv  = KeyOwnerDied { key = kIdent, diedReason = dr }
+        let mRef = RegistryKeyMonitorNotification kIdent ref kEv
+        sendTo ref mRef
+      Just _ ->
+        kill parent "NOT IMPLEMENTED YET"
+  forM_ (Map.toList propSubscribers) (notifyPropSubscribers dr)
   return (regNames, diedNames)
+  where
+    notifyPropSubscribers dr' (kIdent, KMRef{..}) = do
+      let died  = maybe False (elem OnKeyOwnershipChange) mask
+      let event = case died of
+                    True  -> KeyOwnerDied { key = kIdent, diedReason = dr' }
+                    False -> KeyUnregistered { key = kIdent }
+      let mRefNotif = RegistryKeyMonitorNotification kIdent ref event
+      sendTo ref mRefNotif
+
+    regNames = state ^. names
+    props    = state ^. properties
+    monRefs  = state ^. monitors
 
 --------------------------------------------------------------------------------
 -- Internal/State Handling API                                                --
