@@ -71,8 +71,8 @@ module Control.Distributed.Process.Platform.Service.Registry
   , RegistryKeyMonitorNotification(RegistryKeyMonitorNotification)
   ) where
 
-import Control.Distributed.Process hiding (call, monitor, mask)
-import qualified Control.Distributed.Process as P (monitor)
+import Control.Distributed.Process hiding (call, monitor, unmonitor, mask)
+import qualified Control.Distributed.Process as P (monitor, unmonitor)
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Internal.Primitives hiding (monitor)
 import Control.Distributed.Process.Platform.ManagedProcess
@@ -120,21 +120,16 @@ import Control.Distributed.Process.Platform.ManagedProcess.Server.Restricted
   , Result
   , RestrictedAction
   , getState
-  , putState
-  , modifyState
   )
 import qualified Control.Distributed.Process.Platform.ManagedProcess.Server.Restricted as Restricted
-  ( handleCallIf
-  , handleCall
-  , handleCast
+  ( handleCall
   , reply
-  , continue
   )
 -- import Control.Distributed.Process.Platform.ManagedProcess.Server.Unsafe
 -- import Control.Distributed.Process.Platform.ManagedProcess.Server
 import Control.Distributed.Process.Platform.Time
 import Control.Exception (SomeException, Exception, throwIO)
-import Control.Monad (forM_, void)
+import Control.Monad (forM_)
 import Data.Accessor
   ( Accessor
   , accessor
@@ -175,19 +170,13 @@ data Key a =
 instance (Serializable a) => Binary (Key a) where
 instance (Hashable a) => Hashable (Key a) where
 
-class (Eq a, Hashable a, Serializable a) => Keyable a
-instance (Eq a, Hashable a, Serializable a) => Keyable a
-
-data KeyView = K !KeyType !(Maybe ProcessId)
-  deriving (Typeable, Eq)
-
-view :: (Serializable a) => Key a -> KeyView
-view (Key _ t s) = K t s
+class (Show a, Eq a, Hashable a, Serializable a) => Keyable a
+instance (Show a, Eq a, Hashable a, Serializable a) => Keyable a
 
 data KeyUpdateEventMask =
-    OnKeyUnregistered
+    OnKeyRegistered
+  | OnKeyUnregistered
   | OnKeyOwnershipChange
-  | OnKeyValueChange
   | OnKeyLeaseExpiry
   deriving (Typeable, Generic, Eq, Show)
 instance Binary KeyUpdateEventMask where
@@ -201,54 +190,28 @@ instance Hashable RegKeyMonitorRef where
 instance Addressable RegKeyMonitorRef where
   resolve = return . Just . fst . unRef
 
-data KeyUpdateEvent k =
-    KeyNotRecognised
+data KeyUpdateEvent =
+    KeyRegistered
   | KeyUnregistered
-    {
-      key :: !k
-    }
   | KeyLeaseExpired
-    {
-      key :: !k
-    }
   | KeyOwnerDied
     {
-      key        :: !k
-    , diedReason :: !DiedReason
+      diedReason :: !DiedReason
     }
   | KeyOwnerChanged
     {
       previousOwner :: !ProcessId
     , newOwner      :: !ProcessId
-    , key           :: !k
     }
-  deriving (Typeable, Generic)
-instance (Serializable k) => Binary (KeyUpdateEvent k)
-deriving instance (Eq k) => Eq (KeyUpdateEvent k)
-deriving instance (Show k) => Show (KeyUpdateEvent k)
+  deriving (Typeable, Generic, Eq, Show)
+instance Binary KeyUpdateEvent where
 
 data RegistryKeyMonitorNotification k =
-  RegistryKeyMonitorNotification !k !RegKeyMonitorRef !(KeyUpdateEvent k)
+  RegistryKeyMonitorNotification !k !RegKeyMonitorRef !KeyUpdateEvent
   deriving (Typeable, Generic)
 instance (Keyable k) => Binary (RegistryKeyMonitorNotification k) where
-deriving instance (Eq k) => Eq (RegistryKeyMonitorNotification k)
-deriving instance (Show k) => Show (RegistryKeyMonitorNotification k)
-
-data KMRef = KMRef { ref  :: !RegKeyMonitorRef
-                   , mask :: !(Maybe [KeyUpdateEventMask])
-                     -- use Nothing to monitor every event
-                   }
-
-data State k v =
-  State
-  {
-    _names          :: !(HashMap k ProcessId)
-  , _properties     :: !(HashMap (ProcessId, k) v)
-  , _monitors       :: !(HashMap k KMRef)
-  , _monitoredPids  :: !(HashSet ProcessId)
-  , _monitorIdCount :: !Integer
-  }
-  deriving (Typeable, Generic)
+deriving instance (Keyable k) => Eq (RegistryKeyMonitorNotification k)
+deriving instance (Keyable k) => Show (RegistryKeyMonitorNotification k)
 
 data RegisterKeyReq k = RegisterKeyReq !(Key k)
   deriving (Typeable, Generic)
@@ -281,7 +244,26 @@ data MonitorReq k = MonitorReq !(Key k) !(Maybe [KeyUpdateEventMask])
   deriving (Typeable, Generic)
 instance (Keyable k) => Binary (MonitorReq k) where
 
-data Registry k v = LocalRegistry | RemoteRegistry
+data Registry k v = LocalRegistry
+
+data KMRef = KMRef { ref  :: !RegKeyMonitorRef
+                   , mask :: !(Maybe [KeyUpdateEventMask])
+                     -- use Nothing to monitor every event
+                   }
+  deriving (Show)
+
+data State k v =
+  State
+  {
+    _names          :: !(HashMap k ProcessId)
+  , _properties     :: !(HashMap (ProcessId, k) v)
+  , _monitors       :: !(HashMap k KMRef)
+  , _registeredPids :: !(HashSet ProcessId)
+  , _listeningPids  :: !(HashSet ProcessId)
+  , _monitorIdCount :: !Integer
+  , _registryType   :: !(Registry k v)
+  }
+  deriving (Typeable, Generic)
 
 --------------------------------------------------------------------------------
 -- Starting / Running A Registry                                              --
@@ -302,13 +284,15 @@ run reg = MP.pserve () (initIt reg) serverDefinition
 initIt :: forall k v. (Keyable k, Serializable v)
        => Registry k v
        -> InitHandler () (State k v)
-initIt _ () = return $ InitOk initState Infinity
+initIt reg () = return $ InitOk initState Infinity
   where
     initState = State { _names          = Map.empty
                       , _properties     = Map.empty
                       , _monitors       = Map.empty
-                      , _monitoredPids  = Set.empty
+                      , _registeredPids = Set.empty
+                      , _listeningPids  = Set.empty
                       , _monitorIdCount = (1 :: Integer)
+                      , _registryType   = reg
                       } :: State k v
 
 --------------------------------------------------------------------------------
@@ -392,7 +376,7 @@ processDefinition =
               (input ((\(LookupKeyReq (Key{..} :: Key k)) ->
                         keyType == KeyTypeAlias)))
               (\state (LookupKeyReq key') -> reply (findName key' state) state)
-       , Restricted.handleCallIf
+       , handleCallIf
               (input ((\(UnregisterKeyReq (Key{..} :: Key k)) ->
                         keyType == KeyTypeAlias && (isJust keyScope))))
               handleUnregisterName
@@ -411,10 +395,11 @@ handleRegisterName state (RegisterKeyReq Key{..}) = do
   case found of
     Nothing -> do
       let pid  = fromJust keyScope
-      let refs = state ^. monitoredPids
+      let refs = state ^. registeredPids
       refs' <- ensureMonitored pid refs
+      notifySubscribers keyIdentity state KeyRegistered
       reply RegisteredOk $ ( (names ^: Map.insert keyIdentity pid)
-                           . (monitoredPids ^= refs')
+                           . (registeredPids ^= refs')
                            $ state)
     Just pid ->
       if (pid == (fromJust keyScope))
@@ -427,19 +412,22 @@ handleRegisterName state (RegisterKeyReq Key{..}) = do
         False -> P.monitor pid >> return (Set.insert pid refs)
 
 handleUnregisterName :: forall k v. (Keyable k, Serializable v)
-                     => UnregisterKeyReq k
-                     -> RestrictedProcess (State k v) (Result UnregisterKeyReply)
-handleUnregisterName (UnregisterKeyReq Key{..}) = do
-  state <- getState
+                     => State k v
+                     -> UnregisterKeyReq k
+                     -> Process (ProcessReply UnregisterKeyReply (State k v))
+handleUnregisterName state (UnregisterKeyReq Key{..}) = do
   let entry = Map.lookup keyIdentity (state ^. names)
   case entry of
-    Nothing  -> Restricted.reply UnregisterKeyNotFound
+    Nothing  -> reply UnregisterKeyNotFound state
     Just pid ->
       case (pid /= (fromJust keyScope)) of
-        True  -> Restricted.reply UnregisterInvalidKey
+        True  -> reply UnregisterInvalidKey state
         False -> do
-          putState $ ((names ^: Map.delete keyIdentity) $ state)
-          Restricted.reply UnregisterOk
+          notifySubscribers keyIdentity state KeyUnregistered
+          let state' = ( (names ^: Map.delete keyIdentity)
+                       . (monitors ^: Map.filterWithKey (\k' _ -> k' /= keyIdentity))
+                       $ state)
+          reply UnregisterOk $ state'
 
 handleMonitorReq :: forall k v. (Keyable k, Serializable v)
                  => State k v
@@ -452,10 +440,18 @@ handleMonitorReq state cRef (MonitorReq Key{..} mask) = do
   -- make a KMRef for the process...
   let mRef  = RegKeyMonitorRef (caller, mRefId)
   let kmRef = KMRef mRef mask
+  let refs = state ^. listeningPids
+  refs' <- ensureMonitored caller refs
   reply mRef $ ( (monitors ^: Map.insert keyIdentity kmRef)
+               . (listeningPids ^= refs')
                . (monitorIdCount ^= mRefId)
                $ state
                )
+  where
+    ensureMonitored pid refs = do
+      case (Set.member pid refs) of
+        True  -> return refs
+        False -> P.monitor pid >> return (Set.insert pid refs)
 
 handleRegNamesLookup :: forall k v. (Keyable k, Serializable v)
                      => RegNamesReq
@@ -472,47 +468,78 @@ handleMonitorSignal :: forall k v. (Keyable k, Serializable v)
                     => State k v
                     -> ProcessMonitorNotification
                     -> Process (ProcessAction (State k v))
-handleMonitorSignal state (ProcessMonitorNotification _ pid reason) = do
-  (regNames, diedNames) <- notifyListeners state pid reason
-  continue $ ((names ^= Map.difference regNames diedNames) $ state)
-
-notifyListeners :: forall k v. (Keyable k, Serializable v)
-                => State k v
-                -> ProcessId
-                -> DiedReason
-                -> Process (HashMap k ProcessId, HashMap k ProcessId)
-notifyListeners state pid dr = do
-  let diedNames   = Map.filter (== pid) regNames
-  let subscribers = Map.filterWithKey (\k _ -> Map.member k diedNames) monRefs
-  let propSubscribers =
-        Map.filterWithKey (\k _ -> Map.member (pid, k) props) monRefs
-  parent <- getSelfPid
-  forM_ (Map.toList subscribers) $ \(kIdent, KMRef{..}) -> do
-    case mask of
-      Nothing -> do
-        let kEv  = KeyOwnerDied { key = kIdent, diedReason = dr }
-        let mRef = RegistryKeyMonitorNotification kIdent ref kEv
-        sendTo ref mRef
-      Just _ ->
-        kill parent "NOT IMPLEMENTED YET"
-  forM_ (Map.toList propSubscribers) (notifyPropSubscribers dr)
-  return (regNames, diedNames)
+handleMonitorSignal state@State{..} (ProcessMonitorNotification _ pid reason) =
+  do let state' = removeActiveSubscriptions pid state
+     (deadNames, deadProps) <- notifyListeners state' pid reason
+     continue $ ( (names ^= Map.difference _names deadNames)
+                . (properties ^= Map.difference _properties deadProps)
+                $ state)
   where
+    removeActiveSubscriptions p s =
+      let subscriptions = (state ^. listeningPids) in
+      case (Set.member p subscriptions) of
+        False -> s
+        True  -> ( (listeningPids ^: Set.delete p)
+                   -- delete any monitors this (now dead) process held
+                 . (monitors ^: Map.filter ((/= p) . fst . unRef . ref))
+                 $ s)
+
+    notifyListeners :: State k v
+                    -> ProcessId
+                    -> DiedReason
+                    -> Process (HashMap k ProcessId, HashMap (ProcessId, k) v)
+    notifyListeners st pid' dr = do
+      let diedNames = Map.filter (== pid') (st ^. names)
+      let diedProps = Map.filterWithKey (\(p, _) _ -> p == pid')
+                                        (st ^. properties)
+      let nameSubs  = Map.filterWithKey (\k _ -> Map.member k diedNames)
+                                        (st ^. monitors)
+      let propSubs  = Map.filterWithKey (\k _ -> Map.member (pid', k) diedProps)
+                                        (st ^. monitors)
+      forM_ (Map.toList nameSubs) $ \(kIdent, KMRef{..}) -> do
+        let kEvDied = KeyOwnerDied { diedReason = dr }
+        let mRef    = RegistryKeyMonitorNotification kIdent ref
+        case mask of
+          Nothing    -> sendTo ref (mRef kEvDied)
+          Just mask' -> do
+            case (elem OnKeyOwnershipChange mask') of
+              True  -> sendTo ref (mRef kEvDied)
+              False -> do
+                if (elem OnKeyUnregistered mask')
+                  then sendTo ref (mRef KeyUnregistered)
+                  else return ()
+      forM_ (Map.toList propSubs) (notifyPropSubscribers dr)
+      return (diedNames, diedProps)
+
     notifyPropSubscribers dr' (kIdent, KMRef{..}) = do
       let died  = maybe False (elem OnKeyOwnershipChange) mask
       let event = case died of
-                    True  -> KeyOwnerDied { key = kIdent, diedReason = dr' }
-                    False -> KeyUnregistered { key = kIdent }
-      let mRefNotif = RegistryKeyMonitorNotification kIdent ref event
-      sendTo ref mRefNotif
+                    True  -> KeyOwnerDied { diedReason = dr' }
+                    False -> KeyUnregistered
+      sendTo ref $ RegistryKeyMonitorNotification kIdent ref event
 
-    regNames = state ^. names
-    props    = state ^. properties
-    monRefs  = state ^. monitors
+notifySubscribers :: forall k v. (Keyable k, Serializable v)
+                  => k
+                  -> State k v
+                  -> KeyUpdateEvent
+                  -> Process ()
+notifySubscribers k st ev = do
+  let subscribers = Map.filterWithKey (\k' _ -> k' == k) (st ^. monitors)
+  forM_ (Map.toList subscribers) $ \(_, KMRef{..}) -> do
+    if (maybe True (elem (maskFor ev)) mask)
+      then sendTo ref $ RegistryKeyMonitorNotification k ref ev
+      else return ()
 
 --------------------------------------------------------------------------------
--- Internal/State Handling API                                                --
+-- Utilities / Accessors                                                      --
 --------------------------------------------------------------------------------
+
+maskFor :: KeyUpdateEvent -> KeyUpdateEventMask
+maskFor KeyRegistered         = OnKeyRegistered
+maskFor KeyUnregistered       = OnKeyUnregistered
+maskFor (KeyOwnerDied   _)    = OnKeyOwnershipChange
+maskFor (KeyOwnerChanged _ _) = OnKeyOwnershipChange
+maskFor KeyLeaseExpired       = OnKeyLeaseExpiry
 
 findName :: forall k v. (Keyable k, Serializable v)
          => Key k
@@ -529,8 +556,11 @@ properties = accessor _properties (\ps st -> st { _properties = ps })
 monitors :: forall k v. Accessor (State k v) (HashMap k KMRef)
 monitors = accessor _monitors (\ms st -> st { _monitors = ms })
 
-monitoredPids :: forall k v. Accessor (State k v) (HashSet ProcessId)
-monitoredPids = accessor _monitoredPids (\mp st -> st { _monitoredPids = mp })
+registeredPids :: forall k v. Accessor (State k v) (HashSet ProcessId)
+registeredPids = accessor _registeredPids (\mp st -> st { _registeredPids = mp })
+
+listeningPids :: forall k v. Accessor (State k v) (HashSet ProcessId)
+listeningPids = accessor _listeningPids (\lp st -> st { _listeningPids = lp })
 
 monitorIdCount :: forall k v. Accessor (State k v) Integer
 monitorIdCount = accessor _monitorIdCount (\i st -> st { _monitorIdCount = i })

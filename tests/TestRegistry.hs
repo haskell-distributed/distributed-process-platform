@@ -153,7 +153,28 @@ testMonitorName reg = do
                 k == "proc.name.2" && ref == mRef)
               (\(RegistryKeyMonitorNotification _ _ ev) -> return ev)
     ]
-  res `shouldBe` equalTo (Just (KeyOwnerDied "proc.name.2" DiedNormal))
+  res `shouldBe` equalTo (Just (KeyOwnerDied DiedNormal))
+
+testMonitorUnregistration :: ProcessId -> Process ()
+testMonitorUnregistration reg = do
+  (sp, rp) <- newChan
+  pid <- spawnLocal $ do
+    void $ addName reg "proc.1"
+    sendChan sp ()
+    expect :: Process ()
+    void $ unregisterName reg "proc.1"
+    sendChan sp ()
+    (expect :: Process ()) >>= return
+  () <- receiveChan rp
+  mRef <- Registry.monitorName reg "proc.1"
+  send pid ()
+  () <- receiveChan rp
+  res <- receiveTimeout (after 2 Seconds) [
+      matchIf (\(RegistryKeyMonitorNotification k ref _) ->
+                k == "proc.1" && ref == mRef)
+              (\(RegistryKeyMonitorNotification _ _ ev) -> return ev)
+    ]
+  res `shouldBe` equalTo (Just KeyUnregistered)
 
 tests :: NT.Transport  -> IO [Test]
 tests transport = do
@@ -185,6 +206,8 @@ tests transport = do
            (testProc myRegistry testProcessDeathHandling)
         , testCase "Monitoring Name Changes"
            (testProc myRegistry testMonitorName)
+        , testCase "Monitoring Unregistration"
+           (testProc myRegistry testMonitorUnregistration)
         ]
     ]
 
