@@ -18,6 +18,16 @@
 -- Stability   :  experimental
 -- Portability :  non-portable (requires concurrency)
 --
+-- The module provides an extended process registry, offering slightly altered
+-- semantics to the built in @register@ and @unregister@ primitives and a richer
+-- set of features:
+--
+-- * Associate (unique) keys with a process /or/ (unique keys per-process) values
+-- * Use any 'Keyable' algebraic data type (beside 'String') as a key/name
+-- * Query for process with matching keys / values / properties
+-- * Atomically /give away/ properties or names
+-- * Forceibly re-allocate names from a third party
+--
 -- [Subscribing To Registry Events]
 --
 -- It is possible to monitor a registry for changes and be informed whenever
