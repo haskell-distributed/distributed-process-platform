@@ -75,24 +75,31 @@ module Control.Distributed.Process.Platform.Service.Registry
     -- * Monitoring / Waiting
   , monitor
   , monitorName
+  , awaitTimeout
+  , AwaitResult(..)
   , KeyUpdateEventMask(..)
   , KeyUpdateEvent(..)
   , RegKeyMonitorRef
   , RegistryKeyMonitorNotification(RegistryKeyMonitorNotification)
   ) where
 
+{- TODO:
+We /might/ be better off separating the monitoring (or at the notifications)
+from the registration/mapping parts into separate processes.
+-}
+
 import Control.Distributed.Process hiding (call, monitor, unmonitor, mask)
-import qualified Control.Distributed.Process as P (monitor, unmonitor)
+import qualified Control.Distributed.Process as P (monitor)
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Internal.Primitives hiding (monitor)
+import qualified Control.Distributed.Process.Platform.Internal.Primitives as PL
+  ( monitor
+  )
 import Control.Distributed.Process.Platform.ManagedProcess
   ( call
-  , handleCall
   , handleInfo
   , reply
   , continue
-  , stop
-  , stopWith
   , input
   , defaultProcess
   , prioritised
@@ -102,33 +109,23 @@ import Control.Distributed.Process.Platform.ManagedProcess
   , ProcessReply
   , ProcessDefinition(..)
   , PrioritisedProcessDefinition(..)
-  , Priority(..)
   , DispatchPriority
-  , UnhandledMessagePolicy(Drop)
   , CallRef
   )
 import qualified Control.Distributed.Process.Platform.ManagedProcess as MP
   ( pserve
   )
 import Control.Distributed.Process.Platform.ManagedProcess.Server
-  ( handleCast
-  , handleCall
-  , handleCallIf
+  ( handleCallIf
   , handleCallFrom
-  , reply
-  , continue
-  , stop
   )
 import Control.Distributed.Process.Platform.ManagedProcess.Server.Priority
-  ( prioritiseCast_
-  , prioritiseCall_
-  , prioritiseInfo_
+  ( prioritiseInfo_
   , setPriority
   )
 import Control.Distributed.Process.Platform.ManagedProcess.Server.Restricted
   ( RestrictedProcess
   , Result
-  , RestrictedAction
   , getState
   )
 import qualified Control.Distributed.Process.Platform.ManagedProcess.Server.Restricted as Restricted
@@ -138,13 +135,11 @@ import qualified Control.Distributed.Process.Platform.ManagedProcess.Server.Rest
 -- import Control.Distributed.Process.Platform.ManagedProcess.Server.Unsafe
 -- import Control.Distributed.Process.Platform.ManagedProcess.Server
 import Control.Distributed.Process.Platform.Time
-import Control.Exception (SomeException, Exception, throwIO)
 import Control.Monad (forM_)
 import Data.Accessor
   ( Accessor
   , accessor
   , (^:)
-  , (.>)
   , (^=)
   , (^.)
   )
@@ -202,6 +197,9 @@ instance Addressable RegKeyMonitorRef where
 
 data KeyUpdateEvent =
     KeyRegistered
+    {
+      owner :: !ProcessId
+    }
   | KeyUnregistered
   | KeyLeaseExpired
   | KeyOwnerDied
@@ -254,6 +252,13 @@ data MonitorReq k = MonitorReq !(Key k) !(Maybe [KeyUpdateEventMask])
   deriving (Typeable, Generic)
 instance (Keyable k) => Binary (MonitorReq k) where
 
+data AwaitResult k =
+    RegisteredName     !ProcessId !k
+  | ServerUnreachable  !DiedReason
+  | AwaitTimeout
+  deriving (Typeable, Generic, Eq, Show)
+instance (Keyable k) => Binary (AwaitResult k) where
+
 data Registry k v = LocalRegistry
 
 data KMRef = KMRef { ref  :: !RegKeyMonitorRef
@@ -284,8 +289,6 @@ start :: forall k v. (Keyable k, Serializable v)
       -> Process ProcessId
 start reg = spawnLocal $ run reg
 
--- | Run the supplied children using the provided restart strategy.
---
 run :: forall k v. (Keyable k, Serializable v)
     => Registry k v
     -> Process ()
@@ -358,6 +361,42 @@ monitor :: (Addressable a, Keyable k)
         -> Process RegKeyMonitorRef
 monitor svr key' mask' = call svr $ MonitorReq key' mask'
 
+awaitTimeout :: (Addressable a, Keyable k)
+             => a
+             -> Delay
+             -> k
+             -> Process (AwaitResult k)
+awaitTimeout a d k = do
+    p <- forceResolve a
+    Just mRef <- PL.monitor p
+    kRef <- monitor a (Key k KeyTypeAlias Nothing) (Just [OnKeyRegistered])
+    let matches' = matches mRef kRef k
+    let recv = case d of
+                 Infinity -> receiveWait matches' >>= return . Just
+                 Delay t  -> receiveTimeout (asTimeout t) matches'
+    recv >>= return . maybe AwaitTimeout id
+  where
+    forceResolve addr = do
+      mPid <- resolve addr
+      case mPid of
+        Nothing -> die "InvalidAddressable"
+        Just p  -> return p
+
+    matches mr kr k' = [
+        matchIf (\(RegistryKeyMonitorNotification mk' kRef' ev') ->
+                      (matchEv ev' && kRef' == kr && mk' == k'))
+                (\(RegistryKeyMonitorNotification _ _ (KeyRegistered pid)) ->
+                  return $ RegisteredName pid k')
+      , matchIf (\(ProcessMonitorNotification mRef' _ _) -> mRef' == mr)
+                (\(ProcessMonitorNotification _ _ dr) ->
+                  return $ ServerUnreachable dr)
+      ]
+
+    matchEv ev' = case ev' of
+                    KeyRegistered _ -> True
+                    _               -> False
+
+
 --------------------------------------------------------------------------------
 -- Server Process                                                             --
 --------------------------------------------------------------------------------
@@ -407,7 +446,7 @@ handleRegisterName state (RegisterKeyReq Key{..}) = do
       let pid  = fromJust keyScope
       let refs = state ^. registeredPids
       refs' <- ensureMonitored pid refs
-      notifySubscribers keyIdentity state KeyRegistered
+      notifySubscribers keyIdentity state (KeyRegistered pid)
       reply RegisteredOk $ ( (names ^: Map.insert keyIdentity pid)
                            . (registeredPids ^= refs')
                            $ state)
@@ -415,11 +454,6 @@ handleRegisterName state (RegisterKeyReq Key{..}) = do
       if (pid == (fromJust keyScope))
          then reply RegisteredOk      state
          else reply AlreadyRegistered state
-  where
-    ensureMonitored pid refs = do
-      case (Set.member pid refs) of
-        True  -> return refs
-        False -> P.monitor pid >> return (Set.insert pid refs)
 
 handleUnregisterName :: forall k v. (Keyable k, Serializable v)
                      => State k v
@@ -444,24 +478,41 @@ handleMonitorReq :: forall k v. (Keyable k, Serializable v)
                  -> CallRef RegKeyMonitorRef
                  -> MonitorReq k
                  -> Process (ProcessReply RegKeyMonitorRef (State k v))
-handleMonitorReq state cRef (MonitorReq Key{..} mask) = do
+handleMonitorReq state cRef (MonitorReq Key{..} mask') = do
   let mRefId = (state ^. monitorIdCount) + 1
   Just caller <- resolve cRef
-  -- make a KMRef for the process...
   let mRef  = RegKeyMonitorRef (caller, mRefId)
-  let kmRef = KMRef mRef mask
+  let kmRef = KMRef mRef mask'
   let refs = state ^. listeningPids
   refs' <- ensureMonitored caller refs
+  fireEventForPreRegisteredKey state keyIdentity keyScope kmRef
   reply mRef $ ( (monitors ^: Map.insert keyIdentity kmRef)
                . (listeningPids ^= refs')
                . (monitorIdCount ^= mRefId)
                $ state
                )
   where
-    ensureMonitored pid refs = do
-      case (Set.member pid refs) of
-        True  -> return refs
-        False -> P.monitor pid >> return (Set.insert pid refs)
+    fireEventForPreRegisteredKey st kId kScope KMRef{..} = do
+      let evMask = maybe [] id mask
+      case (keyType, elem OnKeyRegistered evMask) of
+        (KeyTypeAlias, True) -> do
+          let found = Map.lookup kId (st ^. names)
+          fireEvent found kId ref
+        (KeyTypeProperty, True) -> do
+          self <- getSelfPid
+          let scope = maybe self id kScope
+          let found = Map.lookup (scope, kId) (st ^. properties)
+          case found of
+            Nothing -> return ()
+            Just _  -> fireEvent (Just scope) kId ref
+        _ -> return ()
+
+    fireEvent fnd kId' ref' = do
+      case fnd of
+        Nothing -> return ()
+        Just p  -> sendTo ref' $ (RegistryKeyMonitorNotification kId'
+                                    ref'
+                                    (KeyRegistered p))
 
 handleRegNamesLookup :: forall k v. (Keyable k, Serializable v)
                      => RegNamesReq
@@ -528,6 +579,12 @@ handleMonitorSignal state@State{..} (ProcessMonitorNotification _ pid reason) =
                     False -> KeyUnregistered
       sendTo ref $ RegistryKeyMonitorNotification kIdent ref event
 
+ensureMonitored :: ProcessId -> HashSet ProcessId -> Process (HashSet ProcessId)
+ensureMonitored pid refs = do
+  case (Set.member pid refs) of
+    True  -> return refs
+    False -> P.monitor pid >> return (Set.insert pid refs)
+
 notifySubscribers :: forall k v. (Keyable k, Serializable v)
                   => k
                   -> State k v
@@ -545,7 +602,7 @@ notifySubscribers k st ev = do
 --------------------------------------------------------------------------------
 
 maskFor :: KeyUpdateEvent -> KeyUpdateEventMask
-maskFor KeyRegistered         = OnKeyRegistered
+maskFor (KeyRegistered _)     = OnKeyRegistered
 maskFor KeyUnregistered       = OnKeyUnregistered
 maskFor (KeyOwnerDied   _)    = OnKeyOwnershipChange
 maskFor (KeyOwnerChanged _ _) = OnKeyOwnershipChange

@@ -18,6 +18,8 @@ import Control.Distributed.Process.Platform.Service.Registry
   , unregisterName
   , lookupName
   , registeredNames
+  , awaitTimeout
+  , AwaitResult(..)
   , RegisterKeyReply(..)
   , UnregisterKeyReply(..)
   )
@@ -176,6 +178,27 @@ testMonitorUnregistration reg = do
     ]
   res `shouldBe` equalTo (Just KeyUnregistered)
 
+testMonitorRegistration :: ProcessId -> Process ()
+testMonitorRegistration reg = do
+  kRef <- Registry.monitorName reg "my.proc"
+  pid <- spawnLocal $ do
+    void $ addName reg "my.proc"
+    expect :: Process ()
+  res <- receiveTimeout (after 2 Seconds) [
+      matchIf (\(RegistryKeyMonitorNotification k ref _) ->
+                k == "my.proc" && ref == kRef)
+              (\(RegistryKeyMonitorNotification _ _ ev) -> return ev)
+    ]
+  res `shouldBe` equalTo (Just (KeyRegistered pid))
+
+testAwaitRegistration :: ProcessId -> Process ()
+testAwaitRegistration reg = do
+  pid <- spawnLocal $ do
+    void $ addName reg "foo.bar"
+    expect :: Process ()
+  res <- awaitTimeout reg (Delay $ within 5 Seconds) "foo.bar"
+  res `shouldBe` equalTo (RegisteredName pid "foo.bar")
+
 tests :: NT.Transport  -> IO [Test]
 tests transport = do
   localNode <- newLocalNode transport initRemoteTable
@@ -206,6 +229,10 @@ tests transport = do
            (testProc myRegistry testProcessDeathHandling)
         , testCase "Monitoring Name Changes"
            (testProc myRegistry testMonitorName)
+        , testCase "Monitoring Registration"
+           (testProc myRegistry testMonitorRegistration)
+        , testCase "Awaiting Registration"
+           (testProc myRegistry testAwaitRegistration)
         , testCase "Monitoring Unregistration"
            (testProc myRegistry testMonitorUnregistration)
         ]
