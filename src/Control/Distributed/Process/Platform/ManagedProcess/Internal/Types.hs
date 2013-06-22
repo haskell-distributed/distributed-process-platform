@@ -277,7 +277,7 @@ data ProcessDefinition s = ProcessDefinition {
 -- Here, we use a private (internal) tag based on a 'MonitorRef', which is
 -- guaranteed to be unique per calling process (in the absence of mallicious
 -- peers). This is handled throughout the roundtrip, such that the reply will
--- either contain the CallId (i.e., the ame 'MonitorRef' with which we're
+-- either contain the CallId (i.e., the same 'MonitorRef' with which we're
 -- tracking the server process) or we'll see the server die.
 --
 -- Of course, the downside to all this is that the monitoring and receiving
