@@ -5,6 +5,7 @@
 
 module Main where
 
+import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Platform.Service.Registry
@@ -18,7 +19,9 @@ import Control.Distributed.Process.Platform.Service.Registry
   , unregisterName
   , lookupName
   , registeredNames
+  , foldNames
   , awaitTimeout
+  , await
   , AwaitResult(..)
   , RegisterKeyReply(..)
   , UnregisterKeyReply(..)
@@ -26,17 +29,20 @@ import Control.Distributed.Process.Platform.Service.Registry
 import qualified Control.Distributed.Process.Platform.Service.Registry as Registry
 import Control.Distributed.Process.Platform.Test
 import Control.Distributed.Process.Platform.Time
+import Control.Distributed.Process.Platform.Timer (sleep)
 import Control.Distributed.Process.Serializable
 import Control.Monad (void, forM_)
 import Control.Rematch
   ( equalTo
   )
 
+import qualified Data.List as List
+
 #if ! MIN_VERSION_base(4,6,0)
 import Prelude hiding (catch)
 #endif
 
-import Test.HUnit (Assertion)
+import Test.HUnit (Assertion, assertFailure)
 import Test.Framework (Test, testGroup)
 import Test.Framework.Providers.HUnit (testCase)
 import TestUtils
@@ -44,7 +50,7 @@ import TestUtils
 import qualified Network.Transport as NT
 
 myRegistry :: Registry String ()
-myRegistry = LocalRegistry
+myRegistry = Registry
 
 withRegistry :: forall k v. (Keyable k, Serializable v)
              => LocalNode
@@ -139,6 +145,20 @@ testProcessDeathHandling reg = do
   regNames' <- registeredNames reg pid
   regNames' `shouldBe` equalTo ([] :: [String])
 
+testLocalRegNamesFold :: ProcessId -> Process ()
+testLocalRegNamesFold reg = do
+  parent <- getSelfPid
+  forM_ [1..1000] $ \(i :: Int) -> spawnLocal $ do
+    send parent i
+    addName reg (show i) >> expect :: Process ()
+  waitForTestRegistrations
+  ns <- foldNames reg [] $ \acc (n, _) -> return ((read n :: Int):acc)
+  (List.sort ns) `shouldBe` equalTo [1..1000]
+  where
+    waitForTestRegistrations = do
+      void $ receiveWait [ matchIf (\(i :: Int) -> i == 1000) (\_ -> return ()) ]
+      sleep $ milliSeconds 150
+
 testMonitorName :: ProcessId -> Process ()
 testMonitorName reg = do
   (sp, rp) <- newChan
@@ -199,6 +219,29 @@ testAwaitRegistration reg = do
   res <- awaitTimeout reg (Delay $ within 5 Seconds) "foo.bar"
   res `shouldBe` equalTo (RegisteredName pid "foo.bar")
 
+testAwaitRegistrationNoTimeout :: ProcessId -> Process ()
+testAwaitRegistrationNoTimeout reg = do
+  parent <- getSelfPid
+  barrier <- liftIO $ newEmptyMVar
+  void $ spawnLocal $ do
+    res <- await reg "baz.bog"
+    case res of
+      RegisteredName _ "baz.bog" -> stash barrier ()
+      _ -> kill parent "BANG!"
+  void $ addName reg "baz.bog"
+  liftIO $ takeMVar barrier >>= return
+
+testAwaitServerDied :: ProcessId -> Process ()
+testAwaitServerDied reg = do
+  result <- liftIO $ newEmptyMVar
+  _ <- spawnLocal $ await reg "bobobob" >>= stash result
+  sleep $ milliSeconds 250
+  kill reg "bye!"
+  res <- liftIO $ takeMVar result
+  case res of
+    ServerUnreachable (DiedException _) -> return ()
+    _ -> liftIO $ assertFailure (show res)
+
 tests :: NT.Transport  -> IO [Test]
 tests transport = do
   localNode <- newLocalNode transport initRemoteTable
@@ -223,6 +266,11 @@ tests transport = do
         , testCase "Unregister Someone Else's Name"
            (testProc myRegistry testUnregisterAnothersName)
         ]
+      , testGroup "Queries"
+        [
+          testCase "Folding Over Registered Names (Locally)"
+           (testProc myRegistry testLocalRegNamesFold)
+        ]
       , testGroup "Named Process Monitoring/Tracking"
         [
           testCase "Process Death Results In Unregistration"
@@ -233,6 +281,10 @@ tests transport = do
            (testProc myRegistry testMonitorRegistration)
         , testCase "Awaiting Registration"
            (testProc myRegistry testAwaitRegistration)
+        , testCase "Await without timeout"
+           (testProc myRegistry testAwaitRegistrationNoTimeout)
+        , testCase "Server Died During Await"
+           (testProc myRegistry testAwaitServerDied)
         , testCase "Monitoring Unregistration"
            (testProc myRegistry testMonitorUnregistration)
         ]

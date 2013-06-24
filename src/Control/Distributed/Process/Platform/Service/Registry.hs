@@ -72,9 +72,11 @@ module Control.Distributed.Process.Platform.Service.Registry
     -- * Queries / Lookups
   , lookupName
   , registeredNames
+  , foldNames
     -- * Monitoring / Waiting
   , monitor
   , monitorName
+  , await
   , awaitTimeout
   , AwaitResult(..)
   , KeyUpdateEventMask(..)
@@ -83,12 +85,32 @@ module Control.Distributed.Process.Platform.Service.Registry
   , RegistryKeyMonitorNotification(RegistryKeyMonitorNotification)
   ) where
 
-{- TODO:
-We /might/ be better off separating the monitoring (or at the notifications)
-from the registration/mapping parts into separate processes.
+{- DESIGN NOTES
+This registry is a single process, parameterised by the types of key and
+property value it can manage. It is, of course, possible to start multiple
+registries and inter-connect them via registration (or whatever mean) with
+one another.
+
+The /Service/ API is intended to be a declarative layer in which you define
+the managed processes that make up your services, and each /Service Component/
+is registered and supervised appropriately for you, with the correct restart
+strategies and start order calculated and so on. The registry is not only a
+service locator, but provides the /wait for these dependencies to start first/
+bit of the puzzle.
+
+At some point, I'd like to offer a shared memory based registry, created on
+behalf of a particular subsystem (i.e., some service or service group) and
+passed implicitly using a reader monad or some such. This would allow multiple
+processes to interact with the registry using STM (or perhaps a simple RWLock)
+and could facilitate reduced contention.
+
+Even for the singleton-process based registry (i.e., this one) we /might/ also
+be better off separating the monitoring (or at least the notifications) from
+the registration/mapping parts into separate processes.
 -}
 
 import Control.Distributed.Process hiding (call, monitor, unmonitor, mask)
+import qualified Control.Distributed.Process.UnsafePrimitives as Unsafe (send)
 import qualified Control.Distributed.Process as P (monitor)
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Internal.Primitives hiding (monitor)
@@ -97,6 +119,7 @@ import qualified Control.Distributed.Process.Platform.Internal.Primitives as PL
   )
 import Control.Distributed.Process.Platform.ManagedProcess
   ( call
+  , cast
   , handleInfo
   , reply
   , continue
@@ -118,6 +141,7 @@ import qualified Control.Distributed.Process.Platform.ManagedProcess as MP
 import Control.Distributed.Process.Platform.ManagedProcess.Server
   ( handleCallIf
   , handleCallFrom
+  , handleCast
   )
 import Control.Distributed.Process.Platform.ManagedProcess.Server.Priority
   ( prioritiseInfo_
@@ -144,6 +168,7 @@ import Data.Accessor
   , (^.)
   )
 import Data.Binary
+import Data.Foldable hiding (elem, forM_)
 import Data.Maybe (fromJust, isJust)
 import Data.Hashable
 import Data.HashMap.Strict (HashMap)
@@ -158,13 +183,18 @@ import GHC.Generics
 -- Types                                                                      --
 --------------------------------------------------------------------------------
 
+-- | Describes how a key will be used - for storing names or properties.
 data KeyType =
-    KeyTypeAlias
-  | KeyTypeProperty
+    KeyTypeAlias    -- ^ the key will refer to a name (i.e., named process)
+  | KeyTypeProperty -- ^ the key will refer to a (per-process) property
   deriving (Typeable, Generic, Show, Eq)
 instance Binary KeyType where
 instance Hashable KeyType where
 
+-- | A registered key. Keys can be mapped to names or (process-local) properties
+-- in the registry. The 'keyIdentity' holds the key's value (e.g., a string or
+-- similar simple data type, which must provide a 'Keyable' instance), whilst
+-- the 'keyType' and 'keyScope' describe the key's intended use and ownership.
 data Key a =
     Key
     { keyIdentity :: !a
@@ -175,17 +205,22 @@ data Key a =
 instance (Serializable a) => Binary (Key a) where
 instance (Hashable a) => Hashable (Key a) where
 
+-- | The 'Keyable' type class describes types that can be used as registry keys.
+-- The constraints ensure that the key can be stored and compared appropriately.
 class (Show a, Eq a, Hashable a, Serializable a) => Keyable a
 instance (Show a, Eq a, Hashable a, Serializable a) => Keyable a
 
+-- | Used to describe a subset of monitoring events to listen for.
 data KeyUpdateEventMask =
-    OnKeyRegistered
-  | OnKeyUnregistered
-  | OnKeyOwnershipChange
-  | OnKeyLeaseExpiry
+    OnKeyRegistered      -- ^ receive an event when a key is registered
+  | OnKeyUnregistered    -- ^ receive an event when a key is unregistered
+  | OnKeyOwnershipChange -- ^ receive an event when a key's owner changes
+  | OnKeyLeaseExpiry     -- ^ receive an event when a key's lease expires
   deriving (Typeable, Generic, Eq, Show)
 instance Binary KeyUpdateEventMask where
 
+-- | An opaque reference used for matching monitoring events. See
+-- 'RegistryKeyMonitorNotification' for more details.
 newtype RegKeyMonitorRef =
   RegKeyMonitorRef { unRef :: (ProcessId, Integer) }
   deriving (Typeable, Generic, Eq, Show)
@@ -195,6 +230,7 @@ instance Hashable RegKeyMonitorRef where
 instance Addressable RegKeyMonitorRef where
   resolve = return . Just . fst . unRef
 
+-- | Provides information about a key monitoring event.
 data KeyUpdateEvent =
     KeyRegistered
     {
@@ -214,6 +250,10 @@ data KeyUpdateEvent =
   deriving (Typeable, Generic, Eq, Show)
 instance Binary KeyUpdateEvent where
 
+-- | This message is delivered to processes which are monioring a
+-- registry key. The opaque monitor reference will match (i.e., be equal
+-- to) the reference returned from the @monitor@ function, which the
+-- 'KeyUpdateEvent' describes the change that took place.
 data RegistryKeyMonitorNotification k =
   RegistryKeyMonitorNotification !k !RegKeyMonitorRef !KeyUpdateEvent
   deriving (Typeable, Generic)
@@ -225,7 +265,10 @@ data RegisterKeyReq k = RegisterKeyReq !(Key k)
   deriving (Typeable, Generic)
 instance (Serializable k) => Binary (RegisterKeyReq k) where
 
-data RegisterKeyReply = RegisteredOk | AlreadyRegistered
+-- | The (return) value of an attempted registration.
+data RegisterKeyReply =
+    RegisteredOk      -- ^ The given key was registered successfully
+  | AlreadyRegistered -- ^ The key was already registered
   deriving (Typeable, Generic, Eq, Show)
 instance Binary RegisterKeyReply where
 
@@ -241,10 +284,11 @@ data UnregisterKeyReq k = UnregisterKeyReq !(Key k)
   deriving (Typeable, Generic)
 instance (Serializable k) => Binary (UnregisterKeyReq k) where
 
+-- | The result of an un-registration attempt.
 data UnregisterKeyReply =
-    UnregisterOk
-  | UnregisterInvalidKey
-  | UnregisterKeyNotFound
+    UnregisterOk  -- ^ The given key was successfully unregistered
+  | UnregisterInvalidKey -- ^ The given key was invalid and could not be unregistered
+  | UnregisterKeyNotFound -- ^ The given key was not found (i.e., was not registered)
   deriving (Typeable, Generic, Eq, Show)
 instance Binary UnregisterKeyReply where
 
@@ -252,14 +296,17 @@ data MonitorReq k = MonitorReq !(Key k) !(Maybe [KeyUpdateEventMask])
   deriving (Typeable, Generic)
 instance (Keyable k) => Binary (MonitorReq k) where
 
+-- | The result of an @await@ operation.
 data AwaitResult k =
-    RegisteredName     !ProcessId !k
-  | ServerUnreachable  !DiedReason
-  | AwaitTimeout
+    RegisteredName     !ProcessId !k   -- ^ The name was registered
+  | ServerUnreachable  !DiedReason     -- ^ The server was unreachable (or died)
+  | AwaitTimeout                       -- ^ The operation timed out
   deriving (Typeable, Generic, Eq, Show)
 instance (Keyable k) => Binary (AwaitResult k) where
 
-data Registry k v = LocalRegistry
+-- | A phantom type, used to parameterise registry startup
+-- with the required key and value types.
+data Registry k v = Registry
 
 data KMRef = KMRef { ref  :: !RegKeyMonitorRef
                    , mask :: !(Maybe [KeyUpdateEventMask])
@@ -279,6 +326,30 @@ data State k v =
   , _registryType   :: !(Registry k v)
   }
   deriving (Typeable, Generic)
+
+-- NB: SHashMap is basically a shim, allowing us to copy a
+-- pointer to our HashMap directly to the querying process'
+-- mailbox with no serialisation or even deepseq evaluation
+-- required. We disallow remote queries (i.e., from other nodes)
+-- and thus the Binary instance below is never used (though it's
+-- required by the type system) and will generate errors if
+-- you attempt to use it.
+data SHashMap k v = SHashMap [(k, v)] (HashMap k v)
+  deriving (Typeable, Generic)
+-- instance (NFData k, NFData v) => NFData (SHashMap k v) where
+
+instance (Keyable k, Serializable v) =>
+         Binary (SHashMap k v) where
+  put = error "AttemptedToUseBinaryShim"
+  get = error "AttemptedToUseBinaryShim"
+
+{- a real instance might've looked something like this:
+
+  put (SHashMap _ hmap) = put (toList hmap)
+  get = do
+    hm <- get :: Get [(k, v)]
+    return $ SHashMap [] (fromList hm)
+-}
 
 --------------------------------------------------------------------------------
 -- Starting / Running A Registry                                              --
@@ -361,6 +432,12 @@ monitor :: (Addressable a, Keyable k)
         -> Process RegKeyMonitorRef
 monitor svr key' mask' = call svr $ MonitorReq key' mask'
 
+await :: (Addressable a, Keyable k)
+      => a
+      -> k
+      -> Process (AwaitResult k)
+await a k = awaitTimeout a Infinity k
+
 awaitTimeout :: (Addressable a, Keyable k)
              => a
              -> Delay
@@ -396,6 +473,23 @@ awaitTimeout a d k = do
                     KeyRegistered _ -> True
                     _               -> False
 
+data QueryDirect = QueryDirectNames | QueryDirectProperties
+  deriving (Typeable, Generic)
+instance Binary QueryDirect where
+
+foldNames :: forall a b k. (Addressable a, Keyable k)
+          => a
+          -> b
+          -> (b -> (k, ProcessId) -> Process b)
+          -> Process b
+foldNames addr acc fn = do
+  self <- getSelfPid
+  cast addr $ (self, QueryDirectNames)
+  -- Although we incur the cost of scanning our mailbox here (which we could
+  -- avoid by spawning an intermediary perhaps), the message is delivered to
+  -- us without any copying or serialisation overheads.
+  SHashMap _ m <- expect :: Process (SHashMap k ProcessId)
+  foldlM fn acc (Map.toList m)
 
 --------------------------------------------------------------------------------
 -- Server Process                                                             --
@@ -431,9 +525,21 @@ processDefinition =
               handleUnregisterName
        , handleCallFrom handleMonitorReq
        , Restricted.handleCall handleRegNamesLookup
+       , handleCast handleQuery
        ]
   , infoHandlers = [handleInfo handleMonitorSignal]
   } :: ProcessDefinition (State k v)
+
+handleQuery :: forall k v. (Keyable k, Serializable v)
+            => State k v
+            -> (ProcessId, QueryDirect)
+            -> Process (ProcessAction (State k v))
+handleQuery st@State{..} (pid, qd) = do
+  let qdH = case qd of
+              QueryDirectNames -> SHashMap [] (st ^. names)
+              QueryDirectProperties -> error "whoops"
+  Unsafe.send pid qdH
+  continue st
 
 handleRegisterName :: forall k v. (Keyable k, Serializable v)
                    => State k v
