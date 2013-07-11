@@ -73,6 +73,9 @@ module Control.Distributed.Process.Platform.Service.Registry
   , lookupName
   , registeredNames
   , foldNames
+  , SearchHandle()
+  , member
+  , queryNames
     -- * Monitoring / Waiting
   , monitor
   , monitorName
@@ -159,7 +162,8 @@ import qualified Control.Distributed.Process.Platform.ManagedProcess.Server.Rest
 -- import Control.Distributed.Process.Platform.ManagedProcess.Server.Unsafe
 -- import Control.Distributed.Process.Platform.ManagedProcess.Server
 import Control.Distributed.Process.Platform.Time
-import Control.Monad (forM_)
+import Control.Monad (forM_, Functor)
+import qualified Control.Monad as Functor (fmap)
 import Data.Accessor
   ( Accessor
   , accessor
@@ -168,7 +172,10 @@ import Data.Accessor
   , (^.)
   )
 import Data.Binary
-import Data.Foldable hiding (elem, forM_)
+import Data.Foldable (Foldable)
+import qualified Data.Foldable as Foldable
+import Data.Traversable (Traversable)
+import qualified Data.Traversable as Traversable
 import Data.Maybe (fromJust, isJust)
 import Data.Hashable
 import Data.HashMap.Strict (HashMap)
@@ -209,6 +216,34 @@ instance (Hashable a) => Hashable (Key a) where
 -- The constraints ensure that the key can be stored and compared appropriately.
 class (Show a, Eq a, Hashable a, Serializable a) => Keyable a
 instance (Show a, Eq a, Hashable a, Serializable a) => Keyable a
+
+-- | A phantom type, used to parameterise registry startup
+-- with the required key and value types.
+data Registry k v = Registry
+
+-- Internal/Private Request/Response Types
+
+data LookupKeyReq k = LookupKeyReq !(Key k)
+  deriving (Typeable, Generic)
+instance (Serializable k) => Binary (LookupKeyReq k) where
+
+data RegNamesReq = RegNamesReq !ProcessId
+  deriving (Typeable, Generic)
+instance Binary RegNamesReq where
+
+data UnregisterKeyReq k = UnregisterKeyReq !(Key k)
+  deriving (Typeable, Generic)
+instance (Serializable k) => Binary (UnregisterKeyReq k) where
+
+-- | The result of an un-registration attempt.
+data UnregisterKeyReply =
+    UnregisterOk  -- ^ The given key was successfully unregistered
+  | UnregisterInvalidKey -- ^ The given key was invalid and could not be unregistered
+  | UnregisterKeyNotFound -- ^ The given key was not found (i.e., was not registered)
+  deriving (Typeable, Generic, Eq, Show)
+instance Binary UnregisterKeyReply where
+
+-- Types used in (setting up and interacting with) key monitors
 
 -- | Used to describe a subset of monitoring events to listen for.
 data KeyUpdateEventMask =
@@ -272,26 +307,6 @@ data RegisterKeyReply =
   deriving (Typeable, Generic, Eq, Show)
 instance Binary RegisterKeyReply where
 
-data LookupKeyReq k = LookupKeyReq !(Key k)
-  deriving (Typeable, Generic)
-instance (Serializable k) => Binary (LookupKeyReq k) where
-
-data RegNamesReq = RegNamesReq !ProcessId
-  deriving (Typeable, Generic)
-instance Binary RegNamesReq where
-
-data UnregisterKeyReq k = UnregisterKeyReq !(Key k)
-  deriving (Typeable, Generic)
-instance (Serializable k) => Binary (UnregisterKeyReq k) where
-
--- | The result of an un-registration attempt.
-data UnregisterKeyReply =
-    UnregisterOk  -- ^ The given key was successfully unregistered
-  | UnregisterInvalidKey -- ^ The given key was invalid and could not be unregistered
-  | UnregisterKeyNotFound -- ^ The given key was not found (i.e., was not registered)
-  deriving (Typeable, Generic, Eq, Show)
-instance Binary UnregisterKeyReply where
-
 data MonitorReq k = MonitorReq !(Key k) !(Maybe [KeyUpdateEventMask])
   deriving (Typeable, Generic)
 instance (Keyable k) => Binary (MonitorReq k) where
@@ -304,10 +319,11 @@ data AwaitResult k =
   deriving (Typeable, Generic, Eq, Show)
 instance (Keyable k) => Binary (AwaitResult k) where
 
--- | A phantom type, used to parameterise registry startup
--- with the required key and value types.
-data Registry k v = Registry
+-- Server state
 
+-- On the server, a monitor reference consists of the actual
+-- RegKeyMonitorRef which we can 'sendTo' /and/ the which
+-- the client matches on, plus an optional list of event masks
 data KMRef = KMRef { ref  :: !RegKeyMonitorRef
                    , mask :: !(Maybe [KeyUpdateEventMask])
                      -- use Nothing to monitor every event
@@ -327,6 +343,12 @@ data State k v =
   }
   deriving (Typeable, Generic)
 
+-- Types used in \direct/ queries
+
+data QueryDirect = QueryDirectNames | QueryDirectProperties
+  deriving (Typeable, Generic)
+instance Binary QueryDirect where
+
 -- NB: SHashMap is basically a shim, allowing us to copy a
 -- pointer to our HashMap directly to the querying process'
 -- mailbox with no serialisation or even deepseq evaluation
@@ -336,20 +358,27 @@ data State k v =
 -- you attempt to use it.
 data SHashMap k v = SHashMap [(k, v)] (HashMap k v)
   deriving (Typeable, Generic)
--- instance (NFData k, NFData v) => NFData (SHashMap k v) where
 
 instance (Keyable k, Serializable v) =>
          Binary (SHashMap k v) where
   put = error "AttemptedToUseBinaryShim"
   get = error "AttemptedToUseBinaryShim"
-
-{- a real instance might've looked something like this:
+{- a real instance could look something like this:
 
   put (SHashMap _ hmap) = put (toList hmap)
   get = do
     hm <- get :: Get [(k, v)]
     return $ SHashMap [] (fromList hm)
 -}
+
+newtype SearchHandle k v = RS { getRS :: HashMap k v }
+  deriving (Typeable)
+
+instance (Keyable k) => Functor (SearchHandle k) where
+  fmap f (RS m) = RS $ Map.map f m
+instance (Keyable k) => Foldable (SearchHandle k) where
+  foldr f acc = Foldable.foldr f acc . getRS
+-- TODO: add Functor and Traversable instances
 
 --------------------------------------------------------------------------------
 -- Starting / Running A Registry                                              --
@@ -473,23 +502,47 @@ awaitTimeout a d k = do
                     KeyRegistered _ -> True
                     _               -> False
 
-data QueryDirect = QueryDirectNames | QueryDirectProperties
-  deriving (Typeable, Generic)
-instance Binary QueryDirect where
+-- Local (non-serialised) shared data access. See note [sharing] below.
 
-foldNames :: forall a b k. (Addressable a, Keyable k)
-          => a
+-- TODO: move to UnsafePrimitives over a passed {Send|Receive}Port here, and
+-- avoid interfering with the caller's mailbox.
+
+foldNames :: forall b k. Keyable k
+          => ProcessId
           -> b
           -> (b -> (k, ProcessId) -> Process b)
           -> Process b
-foldNames addr acc fn = do
+foldNames pid acc fn = do
   self <- getSelfPid
-  cast addr $ (self, QueryDirectNames)
+  cast pid $ (self, QueryDirectNames)
   -- Although we incur the cost of scanning our mailbox here (which we could
   -- avoid by spawning an intermediary perhaps), the message is delivered to
   -- us without any copying or serialisation overheads.
   SHashMap _ m <- expect :: Process (SHashMap k ProcessId)
-  foldlM fn acc (Map.toList m)
+  Foldable.foldlM fn acc (Map.toList m)
+
+member :: (Keyable k, Serializable v)
+       => k
+       -> SearchHandle k v
+       -> Bool
+member k = Map.member k . getRS
+
+queryNames :: forall k b . Keyable k
+       => ProcessId
+       -> (SearchHandle k ProcessId -> Process b)
+       -> Process b
+queryNames pid fn = do
+  self <- getSelfPid
+  cast pid $ (self, QueryDirectNames)
+  SHashMap _ m <- expect :: Process (SHashMap k ProcessId)
+  fn (RS m)
+
+-- note [sharing]:
+-- We use the base library's UnsafePrimitives for these fold/query operations,
+-- to pass a pointer to our internal HashMaps for read-only operations. There
+-- is a potential cost to the caller, if their mailbox is full - we should move
+-- to use unsafe channel's for this at some point.
+--
 
 --------------------------------------------------------------------------------
 -- Server Process                                                             --

@@ -20,8 +20,10 @@ import Control.Distributed.Process.Platform.Service.Registry
   , lookupName
   , registeredNames
   , foldNames
+  , queryNames
   , awaitTimeout
   , await
+  , SearchHandle
   , AwaitResult(..)
   , RegisterKeyReply(..)
   , UnregisterKeyReply(..)
@@ -31,11 +33,12 @@ import Control.Distributed.Process.Platform.Test
 import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process.Platform.Timer (sleep)
 import Control.Distributed.Process.Serializable
-import Control.Monad (void, forM_)
+import Control.Monad (void, forM_, forM)
 import Control.Rematch
   ( equalTo
   )
 
+import qualified Data.Foldable as Foldable
 import qualified Data.List as List
 
 #if ! MIN_VERSION_base(4,6,0)
@@ -159,6 +162,19 @@ testLocalRegNamesFold reg = do
       void $ receiveWait [ matchIf (\(i :: Int) -> i == 1000) (\_ -> return ()) ]
       sleep $ milliSeconds 150
 
+testLocalQueryNamesFold :: ProcessId -> Process ()
+testLocalQueryNamesFold reg = do
+  pids <- forM [1..1000] $ \(i :: Int) -> spawnLocal $ do
+    addName reg (show i) >> expect :: Process ()
+  waitRegs reg 1000
+  ns <- queryNames reg $ \(sh :: SearchHandle String ProcessId) -> do
+    return $ Foldable.foldl (\acc pid -> (pid:acc)) [] sh
+  (List.sort ns) `shouldBe` equalTo pids
+  where
+    waitRegs :: ProcessId -> Int -> Process ()
+    waitRegs _    0 = return ()
+    waitRegs reg' n = await reg' (show n) >> waitRegs reg' (n - 1)
+
 testMonitorName :: ProcessId -> Process ()
 testMonitorName reg = do
   (sp, rp) <- newChan
@@ -270,6 +286,8 @@ tests transport = do
         [
           testCase "Folding Over Registered Names (Locally)"
            (testProc myRegistry testLocalRegNamesFold)
+        , testCase "Querying Registered Names (Locally)"
+           (testProc myRegistry testLocalQueryNamesFold)
         ]
       , testGroup "Named Process Monitoring/Tracking"
         [
