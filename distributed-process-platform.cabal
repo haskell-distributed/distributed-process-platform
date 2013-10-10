@@ -33,7 +33,7 @@ library
                    base >= 4,
                    data-accessor >= 0.2.2.3,
                    distributed-process >= 0.4.2,
-                   binary >= 0.6.3.0 && < 0.8,
+                   binary >= 0.7 && < 0.8,
                    deepseq >= 1.3.0.1 && < 1.4,
                    mtl,
                    containers >= 0.4 && < 0.6,
@@ -54,6 +54,7 @@ library
                    Control.Distributed.Process.Platform.Call,
                    Control.Distributed.Process.Platform.ManagedProcess,
                    Control.Distributed.Process.Platform.ManagedProcess.Client,
+                   Control.Distributed.Process.Platform.ManagedProcess.FSM,
                    Control.Distributed.Process.Platform.ManagedProcess.UnsafeClient,
                    Control.Distributed.Process.Platform.ManagedProcess.Server,
                    Control.Distributed.Process.Platform.ManagedProcess.Server.Priority,
@@ -69,6 +70,7 @@ library
                    Control.Distributed.Process.Platform.Internal.Types,
                    Control.Distributed.Process.Platform.Internal.Queue.SeqQ,
                    Control.Distributed.Process.Platform.Internal.Queue.PriorityQ
+                   Control.Distributed.Process.Platform.Internal.Queue.Mailbox
                    Control.Distributed.Process.Platform.Async.Types,
                    Control.Distributed.Process.Platform.ManagedProcess.Internal.Types,
                    Control.Distributed.Process.Platform.ManagedProcess.Internal.GenProcess
@@ -279,6 +281,41 @@ test-suite RegistryTests
   extensions:      CPP
   main-is:         TestRegistry.hs
 
+test-suite FSMTests
+  type:            exitcode-stdio-1.0
+--  x-uses-tf:       true
+  build-depends:
+                   base >= 4.4 && < 5,
+                   ansi-terminal >= 0.5 && < 0.6,
+                   containers,
+                   hashable,
+                   unordered-containers,
+                   distributed-process,
+                   distributed-process-platform,
+                   distributed-static,
+                   bytestring,
+                   data-accessor,
+                   fingertree == 0.0.1.1,
+                   network-transport >= 0.3 && < 0.4,
+                   deepseq >= 1.3.0.1 && < 1.4,
+                   mtl,
+                   network-transport-tcp >= 0.3 && < 0.4,
+                   binary >= 0.6.3.0 && < 0.8,
+                   network >= 2.3 && < 2.5,
+                   HUnit >= 1.2 && < 2,
+                   stm >= 2.3 && < 2.5,
+                   time > 1.4 && < 1.5,
+                   test-framework >= 0.6 && < 0.9,
+                   test-framework-hunit,
+                   transformers,
+                   rematch >= 0.2.0.0,
+                   ghc-prim
+  hs-source-dirs:
+                   tests
+  ghc-options:     -Wall -threaded -rtsopts -with-rtsopts=-N -fno-warn-unused-do-bind -eventlog
+  extensions:      CPP
+  main-is:         TestFSM.hs
+
 test-suite InternalQueueTests
   type:            exitcode-stdio-1.0
   x-uses-tf:       true
@@ -294,7 +331,8 @@ test-suite InternalQueueTests
                    QuickCheck >= 2.4,
                    test-framework-quickcheck2,
                    rematch >= 0.2.0.0,
-                   ghc-prim
+                   ghc-prim,
+                   distributed-process
   hs-source-dirs:
                    src,
                    tests

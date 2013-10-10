@@ -1,12 +1,20 @@
 {-# LANGUAGE PatternGuards  #-}
 module Main where
 
+import Control.Distributed.Process
+  ( unsafeWrapMessage
+  , unwrapMessage
+  )
 import qualified Control.Distributed.Process.Platform.Internal.Queue.SeqQ as FIFO
 import Control.Distributed.Process.Platform.Internal.Queue.SeqQ ( SeqQ )
 import qualified Control.Distributed.Process.Platform.Internal.Queue.PriorityQ as PQ
+import Control.Distributed.Process.Platform.Internal.Queue.Mailbox ( Mailbox )
+import qualified Control.Distributed.Process.Platform.Internal.Queue.Mailbox as Mailbox
 
 import Control.Rematch hiding (on)
 import Control.Rematch.Run
+import Data.Foldable (Foldable)
+import qualified Data.Foldable as Foldable
 import Data.Function (on)
 import Data.List
 import Test.Framework as TF (defaultMain, testGroup, Test)
@@ -43,12 +51,12 @@ prop_pq_ordering xs =
 
 prop_fifo_enqueue :: Int -> Int -> Int -> Bool
 prop_fifo_enqueue a b c =
-  let q1           = foldl FIFO.enqueue FIFO.empty [a,b,c]
+  let q1            = foldl FIFO.enqueue FIFO.empty [a,b,c]
       Just (a', q2) = FIFO.dequeue q1
       Just (b', q3) = FIFO.dequeue q2
       Just (c', q4) = FIFO.dequeue q3
       Nothing       = FIFO.dequeue q4
-  in q4 `seq` [a',b',c'] == [a,b,c]  -- why seq here? to shut the compiler up.
+  in q4 `seq` [a', b', c'] == [a, b, c]  -- why seq here? to shut the compiler up.
 
 prop_enqueue_empty :: String -> Bool
 prop_enqueue_empty s =
@@ -56,17 +64,22 @@ prop_enqueue_empty s =
       Just (_, q') = FIFO.dequeue q
   in (FIFO.isEmpty q') == ((FIFO.isEmpty q) == False)
 
+prop_mailbox_ordering :: Int -> Int -> Int -> IO Bool
+prop_mailbox_ordering a b c = do
+  q1 <- Foldable.foldlM stashAsMsg Mailbox.empty [a, b, c]
+  let Just (a', q2) = Mailbox.dequeue q1
+      Just (b', q3) = Mailbox.dequeue q2
+      Just (c', q4) = Mailbox.dequeue q3
+      Nothing       = Mailbox.dequeue q4
+  values <- Foldable.foldlM unwrap [] [a', b', c']
+  return $ q4 `seq` values == fmap Just [a, b, c]
+  where
+    stashAsMsg q = return . Mailbox.enqueue q . unsafeWrapMessage
+    unwrap xs  m = unwrapMessage m >>= \r -> return (r:xs)
+
 tests :: [TF.Test]
 tests = [
      testGroup "Priority Queue Tests" [
-        -- testCase "New Queue Should Be Empty"
-        --   (expect (PQ.isEmpty $ PQ.empty) $ equalTo True),
-        -- testCase "Singleton Queue Should Contain One Element"
-        --   (expect (PQ.dequeue $ (PQ.singleton 1 "hello") :: PriorityQ Int String) $
-        --      equalTo $ (Just ("hello", PQ.empty)) :: Maybe (PriorityQ Int String)),
-        -- testCase "Dequeue Empty Queue Should Be Nothing"
-        --   (expect (Q.isEmpty $ PQ.dequeue $
-        --              (PQ.empty :: PriorityQ Int ())) $ equalTo True),
         testProperty "Enqueue/Dequeue should respect Priority order"
             prop_pq_ordering
      ],

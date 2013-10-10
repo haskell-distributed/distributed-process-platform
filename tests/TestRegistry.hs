@@ -150,7 +150,8 @@ testProcessDeathHandling reg = do
   () <- receiveChan rp
   void $ monitor pid
   regNames <- registeredNames reg pid
-  regNames `shouldBe` equalTo ["proc.name.1", "proc.name.2"]
+  regNames `shouldContain` "proc.name.1"
+  regNames `shouldContain` "proc.name.2"
   send pid ()
   receiveWait [
       match (\(ProcessMonitorNotification _ _ _) -> return ())

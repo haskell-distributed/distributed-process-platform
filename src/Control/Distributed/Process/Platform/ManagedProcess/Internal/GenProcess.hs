@@ -2,9 +2,18 @@
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE ViewPatterns               #-}
 
--- | This is the @Process@ implementation of a /managed process/
+-- | This is the @Process@ implementation of a /managed process/. We export
+-- only the /receive loop/ for regular and prioritised managed processes. The
+-- additional exports provide an API for simluating selective receive with a
+-- timeout, for process implementations (such as FSM) that are not intended
+-- to handle their mailboxes directly.
 module Control.Distributed.Process.Platform.ManagedProcess.Internal.GenProcess
-  (recvLoop, precvLoop) where
+  ( recvLoop
+  , precvLoop
+  , TimeoutSpec
+  , startTimer
+  , pollTimer
+  ) where
 
 import Control.Applicative ((<$>))
 import Control.Concurrent (threadDelay)
@@ -255,7 +264,7 @@ checkTimer :: s
            -> TimeoutHandler s
            -> Process (TimeoutAction s)
 checkTimer pState spec handler = let delay = fst spec in do
-  timedOut <- pollTimer spec  -- this will cancel the timer
+  timedOut <- pollTimer spec  -- NB: this will cancel the timer
   case timedOut of
     False -> go spec pState
     True  -> do
@@ -264,7 +273,6 @@ checkTimer pState spec handler = let delay = fst spec in do
         ProcessTimeout   t' s' -> return $ Go (Delay t') s'
         ProcessStop      r     -> return $ Stop pState r
         ProcessStopping  s' r  -> return $ Stop s' r
-        -- TODO handle ProcessStopping......
         ProcessHibernate d' s' -> block d' >> go spec s'
         ProcessContinue  s'    -> go spec s'
   where

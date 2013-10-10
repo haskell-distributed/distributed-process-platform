@@ -315,6 +315,7 @@ waitResponse mTimeout cRef =
   let (_, mRef) = unCaller cRef
       matchers  = [ matchIf (\((CallResponse _ ref) :: CallResponse b) -> ref == mRef)
                             (\((CallResponse m _) :: CallResponse b) -> return (Right m))
+                    -- TODO: we *could* check for ref here and fail if CallResponse was of the wrong type...
                   , matchIf (\(ProcessMonitorNotification ref _ _) -> ref == mRef)
                       (\(ProcessMonitorNotification _ _ r) -> return (Left (err r)))
                   ]

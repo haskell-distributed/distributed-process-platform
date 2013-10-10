@@ -359,7 +359,7 @@ defaultProcessWithPriorities :: [DispatchPriority s] -> PrioritisedProcessDefini
 defaultProcessWithPriorities = PrioritisedProcessDefinition defaultProcess
 
 -- | A basic, stateless process definition, where the unhandled message policy
--- is set to 'Terminate', the default timeout handlers does nothing (i.e., the
+-- is set to 'Terminate', the default timeout handler does nothing (i.e., the
 -- same as calling @continue ()@ and the terminate handler is a no-op.
 statelessProcess :: ProcessDefinition ()
 statelessProcess = defaultProcess :: ProcessDefinition ()
