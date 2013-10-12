@@ -25,7 +25,7 @@
 -- * Associate (unique) keys with a process /or/ (unique key per-process) values
 -- * Use any 'Keyable' algebraic data type as keys
 -- * Query for process with matching keys / values / properties
--- * Atomically /give away/ properties or names
+-- * Atomically /give away/ names
 -- * Forceibly re-allocate names to/from a third party
 --
 -- [Subscribing To Registry Events]
@@ -66,6 +66,7 @@ module Control.Distributed.Process.Platform.Service.Registry
   , addProperty
   , registerName
   , registerValue
+  , giveAwayName
   , RegisterKeyReply(..)
   , unregisterName
   , UnregisterKeyReply(..)
@@ -162,8 +163,7 @@ import qualified Control.Distributed.Process.Platform.ManagedProcess.Server.Rest
 -- import Control.Distributed.Process.Platform.ManagedProcess.Server.Unsafe
 -- import Control.Distributed.Process.Platform.ManagedProcess.Server
 import Control.Distributed.Process.Platform.Time
-import Control.Monad (forM_, Functor)
-import qualified Control.Monad as Functor (fmap)
+import Control.Monad (forM_)
 import Data.Accessor
   ( Accessor
   , accessor
@@ -174,8 +174,6 @@ import Data.Accessor
 import Data.Binary
 import Data.Foldable (Foldable)
 import qualified Data.Foldable as Foldable
-import Data.Traversable (Traversable)
-import qualified Data.Traversable as Traversable
 import Data.Maybe (fromJust, isJust)
 import Data.Hashable
 import Data.HashMap.Strict (HashMap)
@@ -307,6 +305,13 @@ data RegisterKeyReply =
   deriving (Typeable, Generic, Eq, Show)
 instance Binary RegisterKeyReply where
 
+-- | A cast message used to atomically give a name/key away to another process.
+data GiveAwayName k = GiveAwayName !(Key k)
+  deriving (Typeable, Generic)
+instance (Keyable k) => Binary (GiveAwayName k) where
+deriving instance (Keyable k) => Eq (GiveAwayName k)
+deriving instance (Keyable k) => Show (GiveAwayName k)
+
 data MonitorReq k = MonitorReq !(Key k) !(Maybe [KeyUpdateEventMask])
   deriving (Typeable, Generic)
 instance (Keyable k) => Binary (MonitorReq k) where
@@ -415,6 +420,12 @@ initIt reg () = return $ InitOk initState Infinity
 -- | Associate the calling process with the given (unique) key.
 addName :: (Addressable a, Keyable k) => a -> k -> Process RegisterKeyReply
 addName s n = getSelfPid >>= registerName s n
+
+-- | Atomically transfer a (registered) name to another process. Has no effect
+-- if the key is not already registered or the key is already registered to the
+-- supplied process' @ProcessId@.
+giveAwayName :: (Addressable a, Keyable k) => a -> k -> ProcessId -> Process ()
+giveAwayName s n p = cast s $ GiveAwayName $ Key n KeyTypeAlias (Just p)
 
 -- | Associate the given (non-unique) property with the current process.
 addProperty :: (Serializable a, Keyable k, Serializable v)
@@ -587,6 +598,7 @@ processDefinition =
               (input ((\(RegisterKeyReq (Key{..} :: Key k)) ->
                         keyType == KeyTypeAlias && (isJust keyScope))))
               handleRegisterName
+       , handleCast handleGiveAwayName
        , handleCallIf
               (input ((\(LookupKeyReq (Key{..} :: Key k)) ->
                         keyType == KeyTypeAlias)))
@@ -650,6 +662,23 @@ handleUnregisterName state (UnregisterKeyReq Key{..}) = do
                        . (monitors ^: Map.filterWithKey (\k' _ -> k' /= keyIdentity))
                        $ state)
           reply UnregisterOk $ state'
+
+handleGiveAwayName :: forall k v. (Keyable k, Serializable v)
+                   => State k v
+                   -> GiveAwayName k
+                   -> Process (ProcessAction (State k v))
+handleGiveAwayName state (GiveAwayName Key{..}) = do
+  maybe (continue state) giveAway $ Map.lookup keyIdentity (state ^. names)
+  where
+    giveAway pid = do
+      let scope = fromJust keyScope
+      case (pid == scope) of
+        True  -> continue state
+        False -> do
+          notifySubscribers keyIdentity state KeyUnregistered
+          let state' = ((names ^: Map.insert keyIdentity scope) $ state)
+          notifySubscribers keyIdentity state (KeyRegistered scope)
+          continue state'
 
 handleMonitorReq :: forall k v. (Keyable k, Serializable v)
                  => State k v

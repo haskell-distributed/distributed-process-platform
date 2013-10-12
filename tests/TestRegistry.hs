@@ -15,6 +15,7 @@ import Control.Distributed.Process.Platform.Service.Registry
   , KeyUpdateEvent(..)
   , RegistryKeyMonitorNotification(..)
   , addName
+  , giveAwayName
   , registerName
   , unregisterName
   , lookupName
@@ -77,6 +78,15 @@ testCheckLocalName reg = do
   selfPid <- getSelfPid
   fwibble `shouldBe` equalTo (Just selfPid)
 
+testGiveAwayName :: ProcessId -> Process ()
+testGiveAwayName reg = do
+  testPid <- getSelfPid
+  void $ addName reg "cat"
+  pid <- spawnLocal $ link testPid >> (expect :: Process ())
+  giveAwayName reg "cat" pid
+  cat <- lookupName reg "cat"
+  cat `shouldBe` equalTo (Just pid)
+
 testMultipleRegistrations :: ProcessId -> Process ()
 testMultipleRegistrations reg = do
   self <- getSelfPid
@@ -103,7 +113,11 @@ testUnregisterName reg = do
   Just self' <- lookupName reg "fwibble"
   self' `shouldBe` equalTo self
   unreg <- unregisterName reg "fwibble"
+  unregFwibble <- lookupName reg "fwibble"
   unreg `shouldBe` equalTo UnregisterOk
+  -- fwibble is gone...
+  unregFwibble `shouldBe` equalTo Nothing
+  -- but fwobble is still registered
   fwobble <- lookupName reg "fwobble"
   fwobble `shouldBe` equalTo (Just self)
 
@@ -269,6 +283,8 @@ tests transport = do
            (delayedAssertion
             "expected the server to return the incremented state as 7"
             localNode RegisteredOk testAddLocalName)
+        , testCase "Give Away Name"
+           (testProc myRegistry testGiveAwayName)
         , testCase "Verified Registration"
            (testProc myRegistry testCheckLocalName)
         , testCase "Single Process, Multiple Registered Names"
