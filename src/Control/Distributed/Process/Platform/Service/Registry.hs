@@ -22,32 +22,32 @@
 -- semantics to the built in @register@ and @unregister@ primitives and a richer
 -- set of features:
 --
--- * Associate (unique) keys with a process /or/ (unique keys per-process) values
--- * Use any 'Keyable' algebraic data type (beside 'String') as a key/name
+-- * Associate (unique) keys with a process /or/ (unique key per-process) values
+-- * Use any 'Keyable' algebraic data type as keys
 -- * Query for process with matching keys / values / properties
 -- * Atomically /give away/ properties or names
--- * Forceibly re-allocate names from a third party
+-- * Forceibly re-allocate names to/from a third party
 --
 -- [Subscribing To Registry Events]
 --
 -- It is possible to monitor a registry for changes and be informed whenever
 -- changes take place. All subscriptions are /key based/, which means that
--- you can subscribe to name or property changes for any process, though any
+-- you can subscribe to name or property changes for any process, so that any
 -- property changes matching the key you've subscribed to will trigger a
 -- notification (i.e., regardless of the process to which the property belongs).
 --
--- The different events are defined by the 'KeyUpdateEvent' type.
+-- The different types of event are defined by the 'KeyUpdateEvent' type.
 --
 -- Processes subscribe to registry events using @monitorName@ or its counterpart
 -- @monitorProperty@. If the operation succeeds, this will evaluate to an
--- opaque /reference/ which can be used in subsequently handling any received
+-- opaque /reference/ that can be used when subsequently handling incoming
 -- notifications, which will be delivered to the subscriber's mailbox as
 -- @RegistryKeyMonitorNotification keyIdentity opaqueRef event@, where @event@
 -- has the type 'KeyUpdateEvent'.
 --
 -- Subscribers can filter the types of event they receive by using the lower
 -- level @monitor@ function (defined in /this/ module - not the one defined
--- in distributed-process' Primitives) and passing a list of
+-- in distributed-process' @Primitives@) and passing a list of filtering
 -- 'KeyUpdateEventMask'. Without these filters in place, a monitor event will
 -- be fired for /every/ pertinent change.
 --
@@ -212,7 +212,7 @@ data Key a =
 instance (Serializable a) => Binary (Key a) where
 instance (Hashable a) => Hashable (Key a) where
 
--- | The 'Keyable' type class describes types that can be used as registry keys.
+-- | The 'Keyable' class describes types that can be used as registry keys.
 -- The constraints ensure that the key can be stored and compared appropriately.
 class (Show a, Eq a, Hashable a, Serializable a) => Keyable a
 instance (Show a, Eq a, Hashable a, Serializable a) => Keyable a
@@ -412,7 +412,7 @@ initIt reg () = return $ InitOk initState Infinity
 -- Client Facing API                                                          --
 --------------------------------------------------------------------------------
 
--- | Associate the current process with the given (unique) key.
+-- | Associate the calling process with the given (unique) key.
 addName :: (Addressable a, Keyable k) => a -> k -> Process RegisterKeyReply
 addName s n = getSelfPid >>= registerName s n
 
@@ -431,6 +431,7 @@ registerValue :: (Addressable a, Keyable k, Serializable v)
               => a -> k -> v -> Process ()
 registerValue = undefined
 
+-- | Un-register a (unique) name for the calling process.
 unregisterName :: (Addressable a, Keyable k)
                => a
                -> k
@@ -439,12 +440,16 @@ unregisterName s n = do
   self <- getSelfPid
   call s $ UnregisterKeyReq (Key n KeyTypeAlias $ Just self)
 
+-- | Lookup the process identified by the supplied key. Evaluates to
+-- @Nothing@ if the key is not registered.
 lookupName :: (Addressable a, Keyable k) => a -> k -> Process (Maybe ProcessId)
 lookupName s n = call s $ LookupKeyReq (Key n KeyTypeAlias Nothing)
 
+-- | Obtain a list of all registered keys.
 registeredNames :: (Addressable a, Keyable k) => a -> ProcessId -> Process [k]
 registeredNames s p = call s $ RegNamesReq p
 
+-- | Monitor changes to the supplied key.
 monitorName :: (Addressable a, Keyable k)
             => a -> k -> Process RegKeyMonitorRef
 monitorName svr name = do
@@ -454,6 +459,8 @@ monitorName svr name = do
                  }
   monitor svr key' Nothing
 
+-- | Low level monitor operation. For the given key, set up a monitor
+-- filtered by any 'KeyUpdateEventMask' entries that are supplied.
 monitor :: (Addressable a, Keyable k)
         => a
         -> Key k
@@ -461,12 +468,18 @@ monitor :: (Addressable a, Keyable k)
         -> Process RegKeyMonitorRef
 monitor svr key' mask' = call svr $ MonitorReq key' mask'
 
+-- | Await registration of a given key. This function will subsequently
+-- block the evaluating process until the key is registered and a registration
+-- event is dispatched to the caller's mailbox.
+--
 await :: (Addressable a, Keyable k)
       => a
       -> k
       -> Process (AwaitResult k)
 await a k = awaitTimeout a Infinity k
 
+-- | Await registration of a given key, but give up and return @AwaitTimeout@
+-- if registration does not take place within the specified time period (@delay@).
 awaitTimeout :: (Addressable a, Keyable k)
              => a
              -> Delay
@@ -507,6 +520,8 @@ awaitTimeout a d k = do
 -- TODO: move to UnsafePrimitives over a passed {Send|Receive}Port here, and
 -- avoid interfering with the caller's mailbox.
 
+-- | Monadic left fold over all registered names/keys. The fold takes place
+-- in the evaluating process.
 foldNames :: forall b k. Keyable k
           => ProcessId
           -> b
@@ -514,6 +529,7 @@ foldNames :: forall b k. Keyable k
           -> Process b
 foldNames pid acc fn = do
   self <- getSelfPid
+  -- TODO: monitor @pid@ and die if necessary!!!
   cast pid $ (self, QueryDirectNames)
   -- Although we incur the cost of scanning our mailbox here (which we could
   -- avoid by spawning an intermediary perhaps), the message is delivered to
@@ -521,12 +537,15 @@ foldNames pid acc fn = do
   SHashMap _ m <- expect :: Process (SHashMap k ProcessId)
   Foldable.foldlM fn acc (Map.toList m)
 
+-- | Tests whether or not the supplied key is registered, evaluated in the
+-- calling process.
 member :: (Keyable k, Serializable v)
        => k
        -> SearchHandle k v
        -> Bool
 member k = Map.member k . getRS
 
+-- | Evaluate a query on a 'SearchHandle', in the calling process.
 queryNames :: forall k b . Keyable k
        => ProcessId
        -> (SearchHandle k ProcessId -> Process b)
