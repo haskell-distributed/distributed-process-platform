@@ -191,6 +191,24 @@
 -- callback. If your termination handler is set up to do important work
 -- (such as resource cleanup) then you should avoid linking you process
 -- and use monitors instead.
+--
+-- [Performance Considerations]
+--
+-- The server implementations are fairly well optimised already, but there /is/
+-- a cost associated with scanning the mailbox to match on protocol messages,
+-- and additional costs (i.e., space /and/ time) in mapping over all available
+-- /info handlers/ for non-protocol (i.e., neither /call/ nor /cast/) messages.
+-- There are further costs when using prioritisation, in priority space/storage
+-- and in per-message processing (where priorities must be applied and matched
+-- against incoming messages).
+--
+-- In clients, it's important to remember that the /call/ protocol will wait
+-- for a reply in most cases, triggering a full O(n) scan of the caller's
+-- mailbox. If the mailbox is extremely full and calls are regularly made, this
+-- may have a significant impact on the caller. The @callChan@ family of client
+-- API functions can alleviate this, by using (and matching on) a private typed
+-- channel instead, but the server must be written to accomodate this.
+--
 -----------------------------------------------------------------------------
 
 module Control.Distributed.Process.Platform.ManagedProcess
