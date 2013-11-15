@@ -232,6 +232,7 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , TimeoutHandler
   , ProcessAction(..)
   , ProcessReply
+  , Condition
   , CallHandler
   , CastHandler
   , UnhandledMessagePolicy(..)
@@ -368,4 +369,3 @@ statelessProcess = defaultProcess :: ProcessDefinition ()
 -- 'statelessProcess'.
 statelessInit :: Delay -> InitHandler () ()
 statelessInit d () = return $ InitOk () d
-
