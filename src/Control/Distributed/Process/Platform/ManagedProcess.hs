@@ -27,25 +27,22 @@
 -- Once started, a /managed process/ will consume messages from its mailbox and
 -- pass them on to user defined /handlers/ based on the types received (mapped
 -- to those accepted by the handlers) and optionally by also evaluating user
--- supplied predicates to determine which handlers are valid.
+-- supplied predicates to determine which handler(s) should run.
 -- Each handler returns a 'ProcessAction' which specifies how we should proceed.
 -- If none of the handlers is able to process a message (because their types are
--- incompatible) then an 'unhandledMessagePolicy' will be applied.
+-- incompatible), then the 'unhandledMessagePolicy' will be applied.
 --
--- The 'ProcessAction' type defines the ways in which a /managed process/ responds
--- to its inputs, either by continuing to read incoming messages, setting an
--- optional timeout, sleeping for a while or by stopping. The optional timeout
+-- The 'ProcessAction' type defines the ways in which our process can respond
+-- to its inputs, whether by continuing to read incoming messages, setting an
+-- optional timeout, sleeping for a while or stopping. The optional timeout
 -- behaves a little differently to the other process actions. If no messages
 -- are received within the specified time span, a user defined 'timeoutHandler'
 -- will be called in order to determine the next action.
 --
--- Generic processes are defined by the 'ProcessDefinition' type, using record
--- syntax. The 'ProcessDefinition' fields contain handlers (or lists of them)
--- for specific tasks, such as the @timeoutHandler@, and a @terminateHandler@
--- which is called just before the process exits. This handler will be called
--- /whenever/ the process is stopping, i.e., when a callback returns 'stop' as
--- the next action /or/ if an unhandled exit signal or similar asynchronous
--- exception is thrown in (or to) the process itself.
+-- The 'ProcessDefinition' type also defines a @terminateHandler@,
+-- which is called whenever the process exits, whether because a callback has
+-- returned 'stop' as the next action, or as the result of unhandled exit signal
+-- or similar asynchronous exceptions thrown in (or to) the process itself.
 --
 -- The other handlers are split into two groups: /apiHandlers/ and /infoHandlers/.
 -- The former contains handlers for the 'cast' and 'call' protocols, whilst the
@@ -68,8 +65,8 @@
 -- which take expressions (i.e., a function or lambda expression) and create the
 -- appropriate @Dispatcher@ for handling the cast (or call).
 --
--- The cast/call protocol handlers deal with /expected/ inputs. These form
--- the explicit public API for the process, and will usually be exposed by
+-- These cast/call protocols are for dealing with /expected/ inputs. They
+-- will usually form the explicit public API for the process, and be exposed by
 -- providing module level functions that defer to the cast/call API, giving
 -- the author an opportunity to enforce the correct types. For
 -- example:
@@ -81,14 +78,25 @@
 -- @
 --
 -- Note here that the return type from the call is /inferred/ and will not be
--- enforced by the type system. If the server sends a different type back in
--- the reply, then the caller will be blocked indefinitely! This is a slight
--- disadvantage of the loose coupling between client and server, but it does
--- allow servers to handle a variety of messages without specifying the entire
--- protocol to be supported in excruciating detail. If the latter approach
--- appeals, then the "Control.Distributed.Process.Platform.Session" API might
--- be more to your tastes. Note that /that/ API cannot handle unanticipated
--- messages, in the same way that managed processes can.
+-- enforced by the type system. If the server sent a different type back in
+-- the reply, then the caller might be blocked indefinitely! In fact, the
+-- result of mis-matching the expected return type (in the client facing API)
+-- with the actual type returned by the server is more severe in practise.
+-- The underlying types that implement the /call/ protocol carry information
+-- about the expected return type. If there is a mismatch between the input and
+-- output types that the client API uses and those which the server declares it
+-- can handle, then the message will be considered unroutable - no handler will
+-- be executed against it and the unhandled message policy will be applied. You
+-- should, therefore, take great care to align these types since the default
+-- unhandled message policy is to terminate the server! That might seem pretty
+-- extreme, but you can alter the unhandled message policy and/or use the
+-- various overloaded versions of the call API in order to detect errors on the
+-- server such as this.
+--
+-- The cost of potential type mismatches between the client and server is the
+-- main disadvantage of this looser coupling between them. This mechanism does
+-- however, allow servers to handle a variety of messages without specifying the
+-- entire protocol to be supported in excruciating detail.
 --
 -- [Handling Unexpected/Info Messages]
 --
@@ -136,7 +144,7 @@
 -- which provides a StateT based monad for building referentially transparent
 -- callbacks.
 --
--- See "Control.Distributed.Process.Platform.ManagedProcess.Server.Pure" for
+-- See "Control.Distributed.Process.Platform.ManagedProcess.Server.Restricted" for
 -- details and API documentation.
 --
 -- [Handling Errors]

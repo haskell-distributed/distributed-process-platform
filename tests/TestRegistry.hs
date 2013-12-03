@@ -5,6 +5,7 @@
 
 module Main where
 
+import qualified Control.Exception as E (SomeException)
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
@@ -15,13 +16,18 @@ import Control.Distributed.Process.Platform.Service.Registry
   , KeyUpdateEvent(..)
   , RegistryKeyMonitorNotification(..)
   , addName
+  , addProperty
   , giveAwayName
   , registerName
+  , registerValue
   , unregisterName
   , lookupName
+  , lookupProperty
   , registeredNames
   , foldNames
   , queryNames
+  , findByProperty
+  , findByPropertyValue
   , awaitTimeout
   , await
   , SearchHandle
@@ -56,6 +62,9 @@ import qualified Network.Transport as NT
 myRegistry :: Registry String ()
 myRegistry = Registry
 
+counterReg :: Registry String Int
+counterReg = Registry
+
 withRegistry :: forall k v. (Keyable k, Serializable v)
              => LocalNode
              -> Registry k v
@@ -70,6 +79,51 @@ testAddLocalName :: TestResult RegisterKeyReply -> Process ()
 testAddLocalName result = do
   reg <- Registry.start myRegistry
   stash result =<< addName reg "foobar"
+
+testAddLocalProperty :: TestResult (Maybe Int) -> Process ()
+testAddLocalProperty result = do
+  reg <- Registry.start counterReg
+  addProperty reg "chickens" (42 :: Int)
+  stash result =<< lookupProperty reg "chickens"
+
+testAddRemoteProperty :: TestResult Int -> Process ()
+testAddRemoteProperty result = do
+  reg <- Registry.start counterReg
+  p <- spawnLocal $ do
+    pid <- expect
+    Just i <- lookupProperty reg "ducks" :: Process (Maybe Int)
+    send pid i
+  RegisteredOk <- registerValue reg p "ducks" (39 :: Int)
+  getSelfPid >>= send p
+  expect >>= stash result
+
+-- TODO: WE NEED MORE TESTS FOR PROPERTY MONITORING NOTIFICATIONS
+
+testFindByPropertySet :: TestResult Bool -> Process ()
+testFindByPropertySet result = do
+  reg <- Registry.start counterReg
+  p1 <- spawnLocal $ addProperty reg "animals" (1 :: Int) >> expect >>= return
+  p2 <- spawnLocal $ addProperty reg "animals" (1 :: Int) >> expect >>= return
+  sleep $ seconds 1
+  found <- findByProperty reg "animals"
+  found `shouldContain` p1
+  found `shouldContain` p2
+  notFound <- findByProperty reg "foobar"
+  stash result $ length notFound == 0
+
+testFindByPropertyValueSet :: TestResult Bool -> Process ()
+testFindByPropertyValueSet result = do
+  reg <- Registry.start counterReg
+  p1 <- spawnLocal $ addProperty reg "animals" (1 :: Int) >> expect >>= return
+  p2 <- spawnLocal $ addProperty reg "animals" (2 :: Int) >> expect >>= return
+  p3 <- spawnLocal $ addProperty reg "animals" (1 :: Int) >> expect >>= return
+  p4 <- spawnLocal $ addProperty reg "ducks"   (1 :: Int) >> expect >>= return
+
+  sleep $ seconds 1
+  found <- findByPropertyValue reg "animals" (1 :: Int)
+  found `shouldContain` p1
+  found `shouldContain` p3
+  stash result $ length found == 2
 
 testCheckLocalName :: ProcessId -> Process ()
 testCheckLocalName reg = do
@@ -299,12 +353,31 @@ tests transport = do
         , testCase "Unregister Someone Else's Name"
            (testProc myRegistry testUnregisterAnothersName)
         ]
+      , testGroup "Properties"
+        [
+          testCase "Simple Property Registration"
+           (delayedAssertion
+            "expected the server to return the property value 42"
+            localNode (Just 42) testAddLocalProperty)
+        , testCase "Remote Property Registration"
+           (delayedAssertion
+            "expected the server to return the property value 39"
+            localNode 39 testAddRemoteProperty)
+        ]
       , testGroup "Queries"
         [
           testCase "Folding Over Registered Names (Locally)"
            (testProc myRegistry testLocalRegNamesFold)
         , testCase "Querying Registered Names (Locally)"
            (testProc myRegistry testLocalQueryNamesFold)
+        , testCase "Querying Process Where Property Exists (Locally)"
+           (delayedAssertion
+            "expected the server to return only the relevant processes"
+            localNode True testFindByPropertySet)
+        , testCase "Querying Process Where Property Is Set To Specific Value (Locally)"
+           (delayedAssertion
+            "expected the server to return only the relevant processes"
+            localNode True testFindByPropertyValueSet)
         ]
       , testGroup "Named Process Monitoring/Tracking"
         [

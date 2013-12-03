@@ -145,6 +145,7 @@ callChan server msg = do
   sendTo server ((ChanMessage msg sp) :: T.Message a b)
   return rp
 
+-- | A synchronous version of 'callChan'.
 syncCallChan :: forall s a b . (Addressable s, Serializable a, Serializable b)
          => s -> a -> Process b
 syncCallChan server msg = do
@@ -153,6 +154,8 @@ syncCallChan server msg = do
     Left e   -> die e
     Right r' -> return r'
 
+-- | A safe version of 'syncCallChan', which returns @Left ExitReason@ if the
+-- call fails.
 syncSafeCallChan :: forall s a b . (Addressable s, Serializable a, Serializable b)
             => s -> a -> Process (Either ExitReason b)
 syncSafeCallChan server msg = do
