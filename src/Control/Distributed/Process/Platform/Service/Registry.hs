@@ -116,19 +116,16 @@ be better off separating the monitoring (or at least the notifications) from
 the registration/mapping parts into separate processes.
 -}
 
-import Control.Exception (SomeException)
 import Control.Distributed.Process hiding (call, monitor, unmonitor, mask)
 import qualified Control.Distributed.Process.UnsafePrimitives as Unsafe (send)
 import qualified Control.Distributed.Process as P (monitor)
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Internal.Primitives hiding (monitor)
-import Control.Distributed.Process.Platform.Internal.Types (ExitReason)
 import qualified Control.Distributed.Process.Platform.Internal.Primitives as PL
   ( monitor
   )
 import Control.Distributed.Process.Platform.ManagedProcess
   ( call
-  , safeCall
   , UnhandledMessagePolicy(..)
   , cast
   , handleInfo
@@ -186,7 +183,7 @@ import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as Map
 import Data.HashSet (HashSet)
 import qualified Data.HashSet as Set
-import Data.Typeable (Typeable, typeOf)
+import Data.Typeable (Typeable)
 
 import GHC.Generics
 
@@ -607,14 +604,11 @@ findByPropertyValue pid key val = do
           match (\(SHashMap _ m :: SHashMap ProcessId [(k, v)]) -> return $ Just m)
         , matchIf (\(ProcessMonitorNotification _ p _) -> p == pid)
                   (\_ -> return Nothing)
-        , matchAny (\m -> (liftIO $ putStrLn $ "got an answer: " ++ (show $ typeOf m)) >> return Nothing)
+        , matchAny (\_ -> return Nothing) -- TODO: logging?
         ]
-      liftIO $ putStrLn "got an answer!!!"
       case answer of
         Nothing -> die "DisconnectedFromServer"
-        Just m  -> (return $ Map.foldlWithKey' matchKey [] m)
-                   `catch`
-                   (\(e :: SomeException) -> (liftIO $ putStrLn (show e)) >> die "FUCK")
+        Just m  -> return $ Map.foldlWithKey' matchKey [] m
   where
     matchKey ps p ks
       | (key, val) `elem` ks = p:ps

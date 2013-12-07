@@ -5,14 +5,12 @@
 
 module Main where
 
-import qualified Control.Exception as E (SomeException)
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Platform.Service.Registry
   ( Registry(..)
   , Keyable
-  , KeyUpdateEventMask(..)
   , KeyUpdateEvent(..)
   , RegistryKeyMonitorNotification(..)
   , addName
@@ -113,11 +111,12 @@ testFindByPropertySet result = do
 
 testFindByPropertyValueSet :: TestResult Bool -> Process ()
 testFindByPropertyValueSet result = do
+  us <- getSelfPid
   reg <- Registry.start counterReg
-  p1 <- spawnLocal $ addProperty reg "animals" (1 :: Int) >> expect >>= return
-  p2 <- spawnLocal $ addProperty reg "animals" (2 :: Int) >> expect >>= return
-  p3 <- spawnLocal $ addProperty reg "animals" (1 :: Int) >> expect >>= return
-  p4 <- spawnLocal $ addProperty reg "ducks"   (1 :: Int) >> expect >>= return
+  p1 <- spawnLocal $ link us >> addProperty reg "animals" (1 :: Int) >> expect >>= return
+  _  <- spawnLocal $ link us >> addProperty reg "animals" (2 :: Int) >> expect >>= return
+  p3 <- spawnLocal $ link us >> addProperty reg "animals" (1 :: Int) >> expect >>= return
+  _  <- spawnLocal $ link us >> addProperty reg "ducks"   (1 :: Int) >> expect >>= return
 
   sleep $ seconds 1
   found <- findByPropertyValue reg "animals" (1 :: Int)
