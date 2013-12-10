@@ -2,6 +2,7 @@
 {-# LANGUAGE ExistentialQuantification  #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TemplateHaskell            #-}
+{-# LANGUAGE RecordWildCards            #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -200,6 +201,69 @@
 -- (such as resource cleanup) then you should avoid linking you process
 -- and use monitors instead.
 --
+-- [Prioritised Mailboxes]
+--
+-- Many processes need to prioritise certain classes of message over others,
+-- so two subsets of the API are given to supporting those cases.
+--
+-- A 'PrioritisedProcessDefintion' combines the usual 'ProcessDefintion' -
+-- containing the cast/call API, error, termination and info handlers - with a
+-- list of 'Priority' entries, which are used at runtime to prioritise the
+-- server's inputs. Note that it is only messages which are prioritised; The
+-- server's various handlers are still evaluated in insertion order.
+--
+-- Prioritisation does not guarantee that a prioritised message/type will be
+-- processed before other traffic - indeed doing so in a multi-threaded runtime
+-- would be very hard - but in the absence of races between multiple processes,
+-- if two messages are both present in the process' own mailbox, they will be
+-- applied to the ProcessDefinition's handler's in priority order. This is
+-- achieved by draining the real mailbox into a priority queue and processing
+-- each message in turn.
+--
+-- A prioritised process must be configured with a 'Priority' list to be of
+-- any use. Creating a prioritised process without any priorities would be a
+-- big waste of computational resources, and it is worth thinking carefully
+-- about whether or not prioritisation is truly necessary in your design before
+-- choosing to use it.
+--
+-- Using a prioritised process is as simple as calling 'pserve' instead of
+-- 'serve', and passing an initialised 'PrioritisedProcessDefinition'.
+--
+-- [Control Channels]
+--
+-- For advanced users and those requiring very low latency, a prioritised
+-- process definition might not be suitable, since it performs considerable
+-- work /behind the scenes/. There are also designs that wish to segregate a
+-- process' /control plane/ from other kinds of traffic it is expected to
+-- receive. For such use cases, a /control channel/ may prove a better choice,
+-- since typed channels are already prioritised during the mailbox scans that
+-- the base @receiveWait@ and @receiveTimeout@ primitives from
+-- distribute-process provides.
+--
+-- In order to utilise a /control channel/, it is necessary to start the process
+-- using 'chanServe'. Instead of passing in an initialised 'ProcessDefinition',
+-- this requires an expression that takes an opaque 'ControlChannel' and yields
+-- the 'ProcessDefinition' in the 'Process' monad. Providing the opaque reference
+-- in this fashion is necessary, since the type of messages the control channel
+-- carries does not correlate directly to the inter-process traffic it uses
+-- internally. The API for creating handlers that respond to /control channel/
+-- inputs (i.e., 'handleControlChan' and 'handleControlChan_') also requires the
+-- reference to be passed with the handler expression.
+--
+-- In order for clients to communicate with a server via its control channel,
+-- they must pass a handle to a 'ControlPort', which can be obtained by
+-- evaluating 'channelControlPort' on the 'ControlChannel' passed to the
+-- expression which yields the 'ProcessDefinition'. It is for this reason that
+-- we evaluate the 'ProcessDefinition' construction in the process monad, since
+-- using an @MVar@ or @STM@ construct is the easiest way to have the channel's
+-- control port /escape/ to the outside world. A 'ControlPort' is @Serializable@,
+-- so they can alternatively be sent to other processes.
+--
+-- /Control channel/ traffic will only be prioritised over other traffic if the
+-- handlers using it are present before others (e.g., @handleInfo, handleCast@,
+-- etc) in the process definition. It is not possible to combine prioritised
+-- processes with /control channels/.
+--
 -- [Performance Considerations]
 --
 -- The server implementations are fairly well optimised already, but there /is/
@@ -225,6 +289,7 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , InitHandler
   , serve
   , pserve
+  , chanServe
   , runProcess
   , prioritised
     -- * Client interactions
@@ -245,6 +310,8 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , CastHandler
   , UnhandledMessagePolicy(..)
   , CallRef
+  , ControlChannel()
+  , ControlPort()
   , defaultProcess
   , defaultProcessWithPriorities
   , statelessProcess
@@ -271,6 +338,10 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , handleCastIf_
   , handleRpcChan_
   , handleRpcChanIf_
+    -- * Control channels
+  , handleControlChan
+  , handleControlChan_
+  , channelControlPort
     -- * Prioritised mailboxes
   , module Control.Distributed.Process.Platform.ManagedProcess.Server.Priority
     -- * Constructing handler results
@@ -295,7 +366,7 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , replyChan
   ) where
 
-import Control.Distributed.Process hiding (call)
+import Control.Distributed.Process hiding (call, Message)
 import Control.Distributed.Process.Platform.ManagedProcess.Client
 import Control.Distributed.Process.Platform.ManagedProcess.Server
 import Control.Distributed.Process.Platform.ManagedProcess.Server.Priority
@@ -303,6 +374,7 @@ import Control.Distributed.Process.Platform.ManagedProcess.Internal.GenProcess
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
 import Control.Distributed.Process.Platform.Internal.Types (ExitReason(..))
 import Control.Distributed.Process.Platform.Time
+import Control.Distributed.Process.Serializable
 import Prelude hiding (init)
 
 -- TODO: automatic registration
@@ -322,6 +394,21 @@ pserve :: a
        -> PrioritisedProcessDefinition s
        -> Process ()
 pserve argv init def = runProcess (precvLoop def) argv init
+
+-- | Starts a managed process, configured with a typed /control channel/. The
+-- caller supplied expression is evaluated with an opaque reference to the
+-- channel, which must be passed when calling @handleControlChan@. The meaning
+-- and behaviour of the init handler and initial arguments are the same as
+-- those given to 'serve'.
+--
+chanServe :: (Serializable b)
+          => a
+          -> InitHandler a s
+          -> (ControlChannel b -> Process (ProcessDefinition s))
+          -> Process ()
+chanServe argv init mkDef = do
+  pDef <- mkDef . ControlChannel =<< newChan
+  runProcess (recvLoop pDef) argv init
 
 -- | Wraps any /process loop/ and enforces that it adheres to the
 -- managed process' start/stop semantics, i.e., evaluating the

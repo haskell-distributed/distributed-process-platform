@@ -31,6 +31,7 @@ import Control.Distributed.Process.Platform.Timer
   , runAfter
   , TimerRef
   )
+import Control.Monad (void)
 import Prelude hiding (init)
 
 --------------------------------------------------------------------------------
@@ -43,8 +44,14 @@ data TimeoutAction s = Stop s ExitReason | Go Delay s
 
 precvLoop :: PrioritisedProcessDefinition s -> s -> Delay -> Process ExitReason
 precvLoop ppDef pState recvDelay = do
-  tref <- startTimer recvDelay
-  recvQueue ppDef pState tref $ PriorityQ.empty
+    void $ verify $ processDef ppDef
+    tref <- startTimer recvDelay
+    recvQueue ppDef pState tref $ PriorityQ.empty
+  where
+    verify pDef = mapM_ disallowCC $ apiHandlers pDef
+
+    disallowCC (DispatchCC _ _) = die $ ExitOther "IllegalControlChannel"
+    disallowCC _                = return ()
 
 recvQueue :: PrioritisedProcessDefinition s
           -> s

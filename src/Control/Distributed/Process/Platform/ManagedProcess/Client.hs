@@ -16,7 +16,8 @@
 
 module Control.Distributed.Process.Platform.ManagedProcess.Client
   ( -- * API for client interactions with the process
-    shutdown
+    sendControlMessage
+  , shutdown
   , call
   , safeCall
   , tryCall
@@ -43,6 +44,11 @@ import Control.Distributed.Process.Platform.Time
 import Data.Maybe (fromJust)
 
 import Prelude hiding (init)
+
+-- | Send a control message over a 'ControlPort'.
+--
+sendControlMessage :: Serializable m => ControlPort m -> m -> Process ()
+sendControlMessage cp m = sendChan (unPort cp) (CastMessage m)
 
 -- | Send a signal instructing the process to terminate. The /receive loop/ which
 -- manages the process mailbox will prioritise @Shutdown@ signals higher than

@@ -2,7 +2,6 @@
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE PatternGuards              #-}
 
--- | TBC
 module Control.Distributed.Process.Platform.ManagedProcess.Server.Priority
   ( prioritiseCall
   , prioritiseCall_

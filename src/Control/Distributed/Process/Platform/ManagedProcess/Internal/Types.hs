@@ -5,6 +5,7 @@
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE StandaloneDeriving         #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 -- | Types used throughout the ManagedProcess framework
 module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
@@ -28,6 +29,9 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
   , Priority(..)
   , DispatchPriority(..)
   , PrioritisedProcessDefinition(..)
+  , ControlChannel(..)
+  , ControlPort(..)
+  , channelControlPort
   , Dispatcher(..)
   , DeferredDispatcher(..)
   , ExitSignalDispatcher(..)
@@ -171,6 +175,31 @@ type TimeoutHandler s = s -> Delay -> Process (ProcessAction s)
 
 -- dispatching to implementation callbacks
 
+-- | Provides a means for servers to listen on a separate, typed /control/
+-- channel, thereby segregating the channel from their regular
+-- (and potentially busy) mailbox.
+newtype ControlChannel m =
+  ControlChannel {
+      unControl :: (SendPort (Message m ()), ReceivePort (Message m ()))
+    }
+
+-- | The writable end of a 'ControlChannel'.
+--
+newtype ControlPort m =
+  ControlPort {
+      unPort :: SendPort (Message m ())
+    }
+deriving instance (Serializable m) => Binary (ControlPort m)
+instance Eq (ControlPort m) where
+  a == b = unPort a == unPort b
+
+-- | Obtain an opaque expression for communicating with a 'ControlChannel'.
+--
+channelControlPort :: (Serializable m)
+                   => ControlChannel m
+                   -> ControlPort m
+channelControlPort cc = ControlPort $ fst $ unControl cc
+
 -- | Provides dispatch from cast and call messages to a typed handler.
 data Dispatcher s =
     forall a b . (Serializable a, Serializable b) =>
@@ -183,6 +212,12 @@ data Dispatcher s =
     {
       dispatch   :: s -> Message a b -> Process (ProcessAction s)
     , dispatchIf :: s -> Message a b -> Bool
+    }
+  | forall a b . (Serializable a, Serializable b) =>
+    DispatchCC  -- control channel dispatch
+    {
+      channel      :: ReceivePort (Message a b)
+    , dispatch     :: s -> Message a b -> Process (ProcessAction s)
     }
 
 -- | Provides dispatch for any input, returns 'Nothing' for unhandled messages.
@@ -210,6 +245,7 @@ class MessageMatcher d where
 instance MessageMatcher Dispatcher where
   matchDispatch _ s (Dispatch   d)      = match (d s)
   matchDispatch _ s (DispatchIf d cond) = matchIf (cond s) (d s)
+  matchDispatch _ s (DispatchCC c d)    = matchChan c (d s)
 
 class DynMessageHandler d where
   dynHandleMessage :: UnhandledMessagePolicy
@@ -221,6 +257,7 @@ class DynMessageHandler d where
 instance DynMessageHandler Dispatcher where
   dynHandleMessage _ s (Dispatch   d)   msg = handleMessage   msg (d s)
   dynHandleMessage _ s (DispatchIf d c) msg = handleMessageIf msg (c s) (d s)
+  dynHandleMessage _ s (DispatchCC _ d) msg = error "ThisCanNeverHappen"
 
 instance DynMessageHandler DeferredDispatcher where
   dynHandleMessage _ s (DeferredDispatcher d) = d s
@@ -241,6 +278,8 @@ data DispatchPriority s =
       prioritise :: s -> P.Message -> Process (Maybe (Int, P.Message))
     }
 
+-- | A @ProcessDefinition@ decorated with @DispatchPriority@ for certain
+-- input domains.
 data PrioritisedProcessDefinition s =
   PrioritisedProcessDefinition
   {

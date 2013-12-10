@@ -60,6 +60,9 @@ module Control.Distributed.Process.Platform.ManagedProcess.Server
   , handleRpcChanIf_
   , handleCast_
   , handleCastIf_
+    -- * Working with Control Channels
+  , handleControlChan
+  , handleControlChan_
   ) where
 
 import Control.Distributed.Process hiding (call, Message)
@@ -77,7 +80,7 @@ import Prelude hiding (init)
 -- Producing ProcessAction and ProcessReply from inside handler expressions   --
 --------------------------------------------------------------------------------
 
--- | Creates a 'Conditon' from a function that takes a process state @a@ and
+-- | Creates a 'Condition' from a function that takes a process state @a@ and
 -- an input message @b@ and returns a 'Bool' indicating whether the associated
 -- handler should run.
 --
@@ -377,6 +380,33 @@ handleCastIf cond h
     , dispatchIf = checkCast cond
     }
 
+-- | Constructs a /control channel/ handler from a function in the
+-- 'Process' monad. The handler expression returns no reply, and the
+-- /control message/ is treated in the same fashion as a 'cast'.
+--
+-- > handleControlChan = handleControlChanIf $ input (const True)
+--
+handleControlChan :: forall s a . (Serializable a)
+    => ControlChannel a -- ^ the receiving end of the control channel
+    -> (s -> a -> Process (ProcessAction s))
+       -- ^ an action yielding function over the process state and input message
+    -> Dispatcher s
+handleControlChan chan h
+  = DispatchCC { channel  = snd $ unControl chan
+               , dispatch = (\s ((CastMessage p) :: Message a ()) -> h s p)
+               }
+
+-- | Version of 'handleControlChan' that ignores the server state.
+--
+handleControlChan_ :: forall s a. (Serializable a)
+           => ControlChannel a
+           -> (a -> (s -> Process (ProcessAction s)))
+           -> Dispatcher s
+handleControlChan_ chan h
+  = DispatchCC { channel    = snd $ unControl chan
+               , dispatch   = (\s ((CastMessage p) :: Message a ()) -> h p $ s)
+               }
+
 -- | Version of 'handleCast' that ignores the server state.
 --
 handleCast_ :: (Serializable a)
@@ -391,10 +421,9 @@ handleCastIf_ :: forall s a . (Serializable a)
         -- ^ a function from the input message to a /stateless action/, cf 'continue_'
     -> Dispatcher s
 handleCastIf_ cond h
-  = DispatchIf {
-      dispatch   = (\s ((CastMessage p) :: Message a ()) -> h p $ s)
-    , dispatchIf = checkCast cond
-    }
+  = DispatchIf { dispatch   = (\s ((CastMessage p) :: Message a ()) -> h p $ s)
+               , dispatchIf = checkCast cond
+               }
 
 -- | Constructs an /action/ handler. Like 'handleDispatch' this can handle both
 -- 'cast' and 'call' messages, but you won't know which you're dealing with.
