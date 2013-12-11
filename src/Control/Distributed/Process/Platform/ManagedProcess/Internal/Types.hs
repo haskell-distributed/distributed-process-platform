@@ -257,7 +257,7 @@ class DynMessageHandler d where
 instance DynMessageHandler Dispatcher where
   dynHandleMessage _ s (Dispatch   d)   msg = handleMessage   msg (d s)
   dynHandleMessage _ s (DispatchIf d c) msg = handleMessageIf msg (c s) (d s)
-  dynHandleMessage _ s (DispatchCC _ d) msg = error "ThisCanNeverHappen"
+  dynHandleMessage _ _ (DispatchCC _ _) _   = error "ThisCanNeverHappen"
 
 instance DynMessageHandler DeferredDispatcher where
   dynHandleMessage _ s (DeferredDispatcher d) = d s
