@@ -266,20 +266,21 @@
 --
 -- [Performance Considerations]
 --
--- The server implementations are fairly well optimised already, but there /is/
--- a cost associated with scanning the mailbox to match on protocol messages,
--- and additional costs (i.e., space /and/ time) in mapping over all available
+-- The server implementations are fairly optimised, but there /is/ a definite
+-- cost associated with scanning the mailbox to match on protocol messages,
+-- plus additional costs in space and time due to mapping over all available
 -- /info handlers/ for non-protocol (i.e., neither /call/ nor /cast/) messages.
--- There are further costs when using prioritisation, in priority space/storage
--- and in per-message processing (where priorities must be applied and matched
--- against incoming messages).
+-- These are exacerbated when using prioritisation.
 --
--- In clients, it's important to remember that the /call/ protocol will wait
--- for a reply in most cases, triggering a full O(n) scan of the caller's
--- mailbox. If the mailbox is extremely full and calls are regularly made, this
--- may have a significant impact on the caller. The @callChan@ family of client
--- API functions can alleviate this, by using (and matching on) a private typed
--- channel instead, but the server must be written to accomodate this.
+-- From the client perspective, it's important to remember that the /call/
+-- protocol will wait for a reply in most cases, triggering a full O(n) scan of
+-- the caller's mailbox. If the mailbox is extremely full and calls are
+-- regularly made, this may have a significant impact on the caller. The
+-- @callChan@ family of client API functions can alleviate this, by using (and
+-- matching on) a private typed channel instead, but the server must be written
+-- to accomodate this. Similar gains can be had using a /control channel/,
+-- though only one /control channel/ is allowed per process definition, limiting
+-- the input space to just one type.
 --
 -----------------------------------------------------------------------------
 
