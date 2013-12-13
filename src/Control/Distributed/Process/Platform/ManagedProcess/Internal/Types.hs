@@ -330,7 +330,8 @@ data ProcessDefinition s = ProcessDefinition {
 
 -- TODO: Generify this /call/ API and use it in Call.hs to avoid tagging
 
-initCall :: forall s a b . (Addressable s, Serializable a, Serializable b)
+initCall :: forall s a b . (Addressable s,
+                            Serializable a, Serializable b)
          => s -> a -> Process (CallRef b)
 initCall sid msg = do
   (Just pid) <- resolve sid
@@ -340,7 +341,8 @@ initCall sid msg = do
     sendTo pid $ ((CallMessage msg cRef) :: Message a b)
     return cRef
 
-unsafeInitCall :: forall s a b . (Addressable s, NFSerializable a, NFSerializable b)
+unsafeInitCall :: forall s a b . (Addressable s,
+                                  NFSerializable a, NFSerializable b)
          => s -> a -> Process (CallRef b)
 unsafeInitCall sid msg = do
   (Just pid) <- resolve sid
