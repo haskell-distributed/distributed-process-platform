@@ -121,6 +121,10 @@ import qualified Control.Distributed.Process.UnsafePrimitives as Unsafe (send)
 import qualified Control.Distributed.Process as P (monitor)
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Internal.Primitives hiding (monitor)
+import Control.Distributed.Process.Platform.Internal.Types
+  ( Resolvable(..)
+  , Routable(..)
+  )
 import qualified Control.Distributed.Process.Platform.Internal.Primitives as PL
   ( monitor
   )
@@ -277,7 +281,7 @@ newtype RegKeyMonitorRef =
 instance Binary RegKeyMonitorRef where
 instance Hashable RegKeyMonitorRef where
 
-instance Addressable RegKeyMonitorRef where
+instance Resolvable RegKeyMonitorRef where
   resolve = return . Just . fst . unRef
 
 -- | Provides information about a key monitoring event.

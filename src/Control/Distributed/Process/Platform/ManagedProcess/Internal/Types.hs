@@ -53,7 +53,9 @@ import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Internal.Types
   ( Recipient(..)
   , ExitReason(..)
-  , Addressable(..)
+  , Addressable
+  , Resolvable(..)
+  , Routable(..)
   , NFSerializable
   )
 import Control.Distributed.Process.Platform.Time
@@ -79,8 +81,10 @@ instance NFData a => NFData (CallRef a) where
 makeRef :: forall a . (Serializable a) => Recipient -> CallId -> CallRef a
 makeRef r c = CallRef (r, c)
 
-instance Addressable (CallRef a) where
-  resolve (CallRef (r, _))            = resolve r
+instance Resolvable (CallRef a) where
+  resolve (CallRef (r, _)) = resolve r
+
+instance Routable (CallRef a) where
   sendTo  (CallRef (client, tag)) msg = sendTo client (CallResponse msg tag)
   unsafeSendTo (CallRef (c, tag)) msg = unsafeSendTo c (CallResponse msg tag)
 

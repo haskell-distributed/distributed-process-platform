@@ -68,7 +68,8 @@ import Control.Distributed.Process.Platform.Internal.Primitives
   ( awaitResponse
   )
 import Control.Distributed.Process.Platform.Internal.Types
-  ( Addressable(..)
+  ( Addressable
+  , Routable(..)
   , NFSerializable
   , ExitReason
   , Shutdown(..)

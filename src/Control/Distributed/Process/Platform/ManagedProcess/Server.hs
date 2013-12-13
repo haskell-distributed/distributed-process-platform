@@ -69,9 +69,9 @@ import Control.Distributed.Process hiding (call, Message)
 import qualified Control.Distributed.Process as P (Message)
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
-import Control.Distributed.Process.Platform.Internal.Primitives
 import Control.Distributed.Process.Platform.Internal.Types
   ( ExitReason(..)
+  , Routable(..)
   )
 import Control.Distributed.Process.Platform.Time
 import Prelude hiding (init)

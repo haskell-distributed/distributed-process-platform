@@ -124,7 +124,7 @@ flushPendingCalls d proc = do
       match (\(CallResponse (m :: b) _) -> proc m)
     ]
 
--- | Invokes 'call' /out of band/, and returns an "async handle."
+-- | Invokes 'call' /out of band/, and returns an /async handle/.
 --
 -- See "Control.Distributed.Process.Platform.Async".
 --
