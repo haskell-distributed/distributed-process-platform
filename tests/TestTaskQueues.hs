@@ -17,9 +17,6 @@ import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process.Platform.Timer
 import Control.Distributed.Process.Serializable()
 
-import MathsDemo
-import Counter
-import qualified SafeCounter as SafeCounter
 import Control.Distributed.Process.Platform.Task.Queue.BlockingQueue hiding (start)
 import qualified Control.Distributed.Process.Platform.Task.Queue.BlockingQueue as Pool (start)
 
@@ -30,10 +27,8 @@ import Prelude hiding (catch)
 import Test.Framework (Test, testGroup)
 import Test.Framework.Providers.HUnit (testCase)
 import TestUtils
-import ManagedProcessCommon
 
 import qualified Network.Transport as NT
-import Control.Monad (void)
 
 -- utilities
 
