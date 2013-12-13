@@ -188,7 +188,7 @@ newtype ControlChannel m =
 newtype ControlPort m =
   ControlPort {
       unPort :: SendPort (Message m ())
-    }
+    } deriving (Show)
 deriving instance (Serializable m) => Binary (ControlPort m)
 instance Eq (ControlPort m) where
   a == b = unPort a == unPort b
