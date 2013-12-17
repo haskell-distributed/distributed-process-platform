@@ -7,6 +7,7 @@
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE UndecidableInstances       #-}
+{-# LANGUAGE MultiParamTypeClasses      #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -304,16 +305,34 @@ data KeyUpdateEvent =
   deriving (Typeable, Generic, Eq, Show)
 instance Binary KeyUpdateEvent where
 
+reason :: KeyUpdateEvent -> DiedReason
+reason (KeyOwnerDied dr) = dr
+reason _                 = DiedNormal
+
 -- | This message is delivered to processes which are monioring a
 -- registry key. The opaque monitor reference will match (i.e., be equal
 -- to) the reference returned from the @monitor@ function, which the
 -- 'KeyUpdateEvent' describes the change that took place.
 data RegistryKeyMonitorNotification k =
-  RegistryKeyMonitorNotification !k !RegKeyMonitorRef !KeyUpdateEvent
+  RegistryKeyMonitorNotification !k !RegKeyMonitorRef !KeyUpdateEvent !ProcessId
   deriving (Typeable, Generic)
 instance (Keyable k) => Binary (RegistryKeyMonitorNotification k) where
 deriving instance (Keyable k) => Eq (RegistryKeyMonitorNotification k)
 deriving instance (Keyable k) => Show (RegistryKeyMonitorNotification k)
+
+instance (Keyable k, Addressable a) =>
+         Observable (a, Key k)
+                    (a, RegKeyMonitorRef)
+                    (RegistryKeyMonitorNotification k) where
+  observe   (a, k) = monitor a k Nothing >>= \r -> return (a, r)
+  unobserve (a, r) = error "unmonitor a r"
+  observableFrom (a, r) (RegistryKeyMonitorNotification _ r' e s) = do
+    pid <- resolve a
+    maybe (return Nothing)
+          (\p ->
+            case p == s && r == r' of
+              True  -> return $ Just $ reason e
+              False -> return Nothing) pid
 
 data RegisterKeyReq k = RegisterKeyReq !(Key k)
   deriving (Typeable, Generic)
@@ -558,9 +577,9 @@ awaitTimeout a d k = do
         Just p  -> return p
 
     matches mr kr k' = [
-        matchIf (\(RegistryKeyMonitorNotification mk' kRef' ev') ->
+        matchIf (\(RegistryKeyMonitorNotification mk' kRef' ev' _) ->
                       (matchEv ev' && kRef' == kr && mk' == k'))
-                (\(RegistryKeyMonitorNotification _ _ (KeyRegistered pid)) ->
+                (\(RegistryKeyMonitorNotification _ _ (KeyRegistered pid) _) ->
                   return $ RegisteredName pid k')
       , matchIf (\(ProcessMonitorNotification mRef' _ _) -> mRef' == mr)
                 (\(ProcessMonitorNotification _ _ dr) ->
@@ -873,9 +892,12 @@ handleMonitorReq state cRef (MonitorReq Key{..} mask') = do
     fireEvent fnd kId' ref' = do
       case fnd of
         Nothing -> return ()
-        Just p  -> sendTo ref' $ (RegistryKeyMonitorNotification kId'
-                                    ref'
-                                    (KeyRegistered p))
+        Just p  -> do
+          us <- getSelfPid
+          sendTo ref' $ (RegistryKeyMonitorNotification kId'
+                         ref'
+                         (KeyRegistered p)
+                         us)
 
 handleRegNamesLookup :: forall k v. (Keyable k, Serializable v)
                      => RegNamesReq
@@ -892,9 +914,9 @@ handleMonitorSignal :: forall k v. (Keyable k, Serializable v)
                     => State k v
                     -> ProcessMonitorNotification
                     -> Process (ProcessAction (State k v))
-handleMonitorSignal state@State{..} (ProcessMonitorNotification _ pid reason) =
+handleMonitorSignal state@State{..} (ProcessMonitorNotification _ pid diedReason) =
   do let state' = removeActiveSubscriptions pid state
-     (deadNames, deadProps) <- notifyListeners state' pid reason
+     (deadNames, deadProps) <- notifyListeners state' pid diedReason
      continue $ ( (names ^= Map.difference _names deadNames)
                 . (properties ^= Map.difference _properties deadProps)
                 $ state)
@@ -923,14 +945,15 @@ handleMonitorSignal state@State{..} (ProcessMonitorNotification _ pid reason) =
       forM_ (Map.toList nameSubs) $ \(kIdent, KMRef{..}) -> do
         let kEvDied = KeyOwnerDied { diedReason = dr }
         let mRef    = RegistryKeyMonitorNotification kIdent ref
+        us <- getSelfPid
         case mask of
-          Nothing    -> sendTo ref (mRef kEvDied)
+          Nothing    -> sendTo ref (mRef kEvDied us)
           Just mask' -> do
             case (elem OnKeyOwnershipChange mask') of
-              True  -> sendTo ref (mRef kEvDied)
+              True  -> sendTo ref (mRef kEvDied us)
               False -> do
                 if (elem OnKeyUnregistered mask')
-                  then sendTo ref (mRef KeyUnregistered)
+                  then sendTo ref (mRef KeyUnregistered us)
                   else return ()
       forM_ (Map.toList propSubs) (notifyPropSubscribers dr)
       return (diedNames, diedProps)
@@ -940,7 +963,7 @@ handleMonitorSignal state@State{..} (ProcessMonitorNotification _ pid reason) =
       let event = case died of
                     True  -> KeyOwnerDied { diedReason = dr' }
                     False -> KeyUnregistered
-      sendTo ref $ RegistryKeyMonitorNotification kIdent ref event
+      getSelfPid >>= sendTo ref . RegistryKeyMonitorNotification kIdent ref event
 
 ensureMonitored :: ProcessId -> HashSet ProcessId -> Process (HashSet ProcessId)
 ensureMonitored pid refs = do
@@ -957,7 +980,7 @@ notifySubscribers k st ev = do
   let subscribers = Map.filterWithKey (\k' _ -> k' == k) (st ^. monitors)
   forM_ (Map.toList subscribers) $ \(_, KMRef{..}) -> do
     if (maybe True (elem (maskFor ev)) mask)
-      then sendTo ref $ RegistryKeyMonitorNotification k ref ev
+      then getSelfPid >>= sendTo ref . RegistryKeyMonitorNotification k ref ev
       else return ()
 
 --------------------------------------------------------------------------------

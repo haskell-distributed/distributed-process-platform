@@ -255,9 +255,9 @@ testMonitorName reg = do
   mRef <- Registry.monitorName reg "proc.name.2"
   send pid ()
   res <- receiveTimeout (after 2 Seconds) [
-      matchIf (\(RegistryKeyMonitorNotification k ref _) ->
+      matchIf (\(RegistryKeyMonitorNotification k ref _ _) ->
                 k == "proc.name.2" && ref == mRef)
-              (\(RegistryKeyMonitorNotification _ _ ev) -> return ev)
+              (\(RegistryKeyMonitorNotification _ _ ev _) -> return ev)
     ]
   res `shouldBe` equalTo (Just (KeyOwnerDied DiedNormal))
 
@@ -276,9 +276,9 @@ testMonitorUnregistration reg = do
   send pid ()
   () <- receiveChan rp
   res <- receiveTimeout (after 2 Seconds) [
-      matchIf (\(RegistryKeyMonitorNotification k ref _) ->
+      matchIf (\(RegistryKeyMonitorNotification k ref _ _) ->
                 k == "proc.1" && ref == mRef)
-              (\(RegistryKeyMonitorNotification _ _ ev) -> return ev)
+              (\(RegistryKeyMonitorNotification _ _ ev _) -> return ev)
     ]
   res `shouldBe` equalTo (Just KeyUnregistered)
 
@@ -289,9 +289,9 @@ testMonitorRegistration reg = do
     void $ addName reg "my.proc"
     expect :: Process ()
   res <- receiveTimeout (after 2 Seconds) [
-      matchIf (\(RegistryKeyMonitorNotification k ref _) ->
+      matchIf (\(RegistryKeyMonitorNotification k ref _ _) ->
                 k == "my.proc" && ref == kRef)
-              (\(RegistryKeyMonitorNotification _ _ ev) -> return ev)
+              (\(RegistryKeyMonitorNotification _ _ ev _) -> return ev)
     ]
   res `shouldBe` equalTo (Just (KeyRegistered pid))
 
