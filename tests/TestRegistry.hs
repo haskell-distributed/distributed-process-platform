@@ -261,6 +261,41 @@ testMonitorName reg = do
     ]
   res `shouldBe` equalTo (Just (KeyOwnerDied DiedNormal))
 
+testUnmonitor :: ProcessId -> Process ()
+testUnmonitor reg = do
+  let k = "chickens"
+  let name = "poultry"
+  pid <- spawnLocal $ do
+    addName reg name
+    void $ addProperty reg k (42 :: Int)
+    expect >>= return
+  mRef <- Registry.monitorProp reg k pid
+
+  void $ receiveWait [
+      matchIf (\(RegistryKeyMonitorNotification k ref ev _) ->
+                k' == k && ref == mRef && ev == (KeyRegistered pid))
+              return
+    ]
+
+  unmonitor mRef
+  kill pid "goodbye!"
+  awaitExit pid
+  Nothing <- lookupName reg name
+  t <- receiveTimeout (after 1 Seconds) [
+           matchIf (\(RegistryKeyMonitorNotification k ref ev _) ->
+                    k' == k && ref == mRef && ev == (KeyRegistered pid))
+                   return
+         ]
+  t `shouldBe` Nothing
+
+-- testMonitorPropertyChanged :: ProcessId -> Process ()
+
+-- testMonitorPropertySet :: ProcessId -> Process ()
+
+-- testMonitorPropertyOwnerChanged :: ProcessId -> Process ()
+
+-- testMonitorPropertyOwnerDied :: ProcessId -> Process ()
+
 testMonitorUnregistration :: ProcessId -> Process ()
 testMonitorUnregistration reg = do
   (sp, rp) <- newChan
@@ -384,6 +419,8 @@ tests transport = do
            (testProc myRegistry testProcessDeathHandling)
         , testCase "Monitoring Name Changes"
            (testProc myRegistry testMonitorName)
+        , testCase "Unmonitoring (Ignoring) Changes"
+           (testProc myRegistry testUnmonitor)
         , testCase "Monitoring Registration"
            (testProc myRegistry testMonitorRegistration)
         , testCase "Awaiting Registration"
