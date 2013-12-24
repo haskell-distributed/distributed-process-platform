@@ -1,6 +1,25 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric      #-}
 
+-----------------------------------------------------------------------------
+-- |
+-- Module      :  Control.Distributed.Process.Platform.Service.Monitoring
+-- Copyright   :  (c) Tim Watson 2013 - 2014
+-- License     :  BSD3 (see the file LICENSE)
+--
+-- Maintainer  :  Tim Watson <watson.timothy@gmail.com>
+-- Stability   :  experimental
+-- Portability :  non-portable (requires concurrency)
+--
+-- The module provides a primitive node monitoring capability, implemented as
+-- a /distributed-process Management Agent/. Once the 'nodeMonitor' agent is
+-- started, calling 'monitorNodes' will ensure that whenever the local node
+-- detects a new network-transport connection (from another cloud haskell node),
+-- the caller will receive a 'NodeUp' message in its mailbox. If a node
+-- disconnects, a corollary 'NodeDown' message will be delivered as well.
+--
+-----------------------------------------------------------------------------
+
 module Control.Distributed.Process.Platform.Service.Monitoring
   (
     NodeUp(..)
