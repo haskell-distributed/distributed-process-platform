@@ -11,7 +11,7 @@
 -- Stability   :  experimental
 -- Portability :  non-portable (requires concurrency)
 --
--- The module provides a primitive node monitoring capability, implemented as
+-- This module provides a primitive node monitoring capability, implemented as
 -- a /distributed-process Management Agent/. Once the 'nodeMonitor' agent is
 -- started, calling 'monitorNodes' will ensure that whenever the local node
 -- detects a new network-transport connection (from another cloud haskell node),
