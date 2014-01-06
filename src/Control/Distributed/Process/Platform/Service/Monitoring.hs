@@ -83,7 +83,7 @@ instance NFData NodeDown where
 
 -- | The @MxAgentId@ for the node monitoring agent.
 nodeMonitorAgentId :: MxAgentId
-nodeMonitorAgentId = MxAgentId "service.monitoring.node-monitor"
+nodeMonitorAgentId = MxAgentId "service.monitoring.nodes"
 
 -- | Start monitoring node connection/disconnection events. When a
 -- connection event occurs, the calling process will receive a message
