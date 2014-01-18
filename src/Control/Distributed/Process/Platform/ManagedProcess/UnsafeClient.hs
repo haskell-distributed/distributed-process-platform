@@ -36,7 +36,8 @@
 
 module Control.Distributed.Process.Platform.ManagedProcess.UnsafeClient
   ( -- * Unsafe variants of the Client API
-    shutdown
+    sendControlMessage
+  , shutdown
   , call
   , safeCall
   , tryCall
@@ -59,6 +60,7 @@ import Control.Distributed.Process
   , die
   , terminate
   , receiveTimeout
+  , unsafeSendChan
   )
 import Control.Distributed.Process.Platform.Async
   ( Async
@@ -77,6 +79,7 @@ import Control.Distributed.Process.Platform.Internal.Types
 import Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
   ( Message(CastMessage, ChanMessage)
   , CallResponse(..)
+  , ControlPort(..)
   , unsafeInitCall
   , waitResponse
   )
@@ -84,8 +87,14 @@ import Control.Distributed.Process.Platform.Time
   ( TimeInterval
   , asTimeout
   )
-
+import Control.Distributed.Process.Serializable hiding (SerializableDict)
 import Data.Maybe (fromJust)
+
+-- | Send a control message over a 'ControlPort'. This version of
+-- @shutdown@ uses /unsafe primitives/.
+--
+sendControlMessage :: Serializable m => ControlPort m -> m -> Process ()
+sendControlMessage cp m = unsafeSendChan (unPort cp) (CastMessage m)
 
 -- | Send a signal instructing the process to terminate. This version of
 -- @shutdown@ uses /unsafe primitives/.

@@ -179,6 +179,26 @@ type TimeoutHandler s = s -> Delay -> Process (ProcessAction s)
 
 -- dispatching to implementation callbacks
 
+-- TODO: Now that we've got matchSTM available, we can have two kinds of CC.
+-- The easiest approach would be to add an StmControlChannel newtype, since
+-- that can't be Serializable (and will have to rely on PCopy for delivery).
+-- Rather than write stmChanServe in terms of creating that channel object
+-- ourselves (which is necessary for the TypedChannel based approach we
+-- currently offer), I think it should accept the (STM a) "read" action and
+-- leave the PCopy based delivery nonsense to the user, since we don't want
+-- to /encourage/ that sort of thing outside of this codebase.
+
+{-
+
+data InputChannelDispatcher =
+  InputChannelDispatcher { chan :: InputChannel s
+                         , dispatch :: s -> Message a b -> Process (ProcessAction s)
+                         }
+
+instance MessageMatcher Dispatcher where
+  matchDispatch _ _ (DispatchInputChannelDispatcher c d) = matchInputChan (d s)
+-}
+
 -- | Provides a means for servers to listen on a separate, typed /control/
 -- channel, thereby segregating the channel from their regular
 -- (and potentially busy) mailbox.
@@ -220,8 +240,8 @@ data Dispatcher s =
   | forall a b . (Serializable a, Serializable b) =>
     DispatchCC  -- control channel dispatch
     {
-      channel      :: ReceivePort (Message a b)
-    , dispatch     :: s -> Message a b -> Process (ProcessAction s)
+      channel  :: ReceivePort (Message a b)
+    , dispatch :: s -> Message a b -> Process (ProcessAction s)
     }
 
 -- | Provides dispatch for any input, returns 'Nothing' for unhandled messages.
