@@ -31,10 +31,7 @@ module Control.Distributed.Process.Platform.Service.Monitoring
   ) where
 
 import Control.DeepSeq (NFData)
-import Control.Distributed.Process
--- TODO: the internals should be hidden and Process.hs needs to re-export
--- the entire NodeId object in reality.
-import Control.Distributed.Process.Internal.Types (NodeId(..))
+import Control.Distributed.Process  -- NB: requires NodeId(..) to be exported!
 import Control.Distributed.Process.Management
   ( MxEvent(MxConnected, MxDisconnected)
   , MxAgentId(..)
