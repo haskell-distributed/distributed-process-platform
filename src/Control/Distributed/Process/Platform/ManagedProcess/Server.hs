@@ -46,6 +46,7 @@ module Control.Distributed.Process.Platform.ManagedProcess.Server
   , handleCast
   , handleCastIf
   , handleInfo
+  , handleRaw
   , handleDispatch
   , handleDispatchIf
   , handleExit
@@ -488,6 +489,14 @@ handleInfo h = DeferredDispatcher { dispatchInfo = doHandleInfo h }
                              -> P.Message
                              -> Process (Maybe (ProcessAction s2))
     doHandleInfo h' s msg = handleMessage msg (h' s)
+
+-- | Handle completely /raw/ input messages.
+--
+handleRaw :: forall s. (s -> P.Message -> Process (ProcessAction s))
+          -> DeferredDispatcher s
+handleRaw h = DeferredDispatcher { dispatchInfo = doHandle h }
+  where
+    doHandle h' s msg = h' s msg >>= return . Just
 
 -- | Creates an /exit handler/ scoped to the execution of any and all the
 -- registered call, cast and info handlers for the process.
