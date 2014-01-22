@@ -489,19 +489,19 @@ addName :: (Addressable a, Keyable k) => a -> k -> Process RegisterKeyReply
 addName s n = getSelfPid >>= registerName s n
 
 -- | Atomically transfer a (registered) name to another process. Has no effect
--- if the key is not already registered or the key is already registered to the
--- supplied process' @ProcessId@.
+-- if the name does is not registered to the calling process!
+--
 giveAwayName :: (Addressable a, Keyable k) => a -> k -> ProcessId -> Process ()
 giveAwayName s n p = do
   us <- getSelfPid
   cast s $ GiveAwayName p $ Key n KeyTypeAlias (Just us)
 
 -- | Associate the given (non-unique) property with the current process.
+-- If the property already exists, it will be overwritten with the new value.
 addProperty :: (Addressable a, Keyable k, Serializable v)
             => a -> k -> v -> Process RegisterKeyReply
 addProperty s k v = do
-  us <- getSelfPid
-  call s $ (RegisterKeyReq (Key k KeyTypeProperty $ Just us), v)
+  call s $ (RegisterKeyReq (Key k KeyTypeProperty $ Nothing), v)
 
 -- | Register the item at the given address.
 registerName :: (Addressable a, Keyable k)
@@ -509,6 +509,7 @@ registerName :: (Addressable a, Keyable k)
 registerName s n p = call s $ RegisterKeyReq (Key n KeyTypeAlias $ Just p)
 
 -- | Register an item at the given address and associate it with a value.
+-- If the property already exists, it will be overwritten with the new value.
 registerValue :: (Addressable a, Addressable b, Keyable k, Serializable v)
               => a -> b -> k -> v -> Process RegisterKeyReply
 registerValue s t n v = do
