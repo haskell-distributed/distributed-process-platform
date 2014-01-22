@@ -85,6 +85,7 @@ module Control.Distributed.Process.Platform.Service.Registry
   , monitor
   , monitorName
   , monitorProp
+  , unmonitor
   , await
   , awaitTimeout
   , AwaitResult(..)
@@ -97,8 +98,7 @@ module Control.Distributed.Process.Platform.Service.Registry
 {- DESIGN NOTES
 This registry is a single process, parameterised by the types of key and
 property value it can manage. It is, of course, possible to start multiple
-registries and inter-connect them via registration (or whatever mean) with
-one another.
+registries and inter-connect them via registration, with one another.
 
 The /Service/ API is intended to be a declarative layer in which you define
 the managed processes that make up your services, and each /Service Component/
@@ -107,7 +107,7 @@ strategies and start order calculated and so on. The registry is not only a
 service locator, but provides the /wait for these dependencies to start first/
 bit of the puzzle.
 
-At some point, I'd like to offer a shared memory based registry, created on
+At some point, we'd like to offer a shared memory based registry, created on
 behalf of a particular subsystem (i.e., some service or service group) and
 passed implicitly using a reader monad or some such. This would allow multiple
 processes to interact with the registry using STM (or perhaps a simple RWLock)
@@ -118,6 +118,7 @@ be better off separating the monitoring (or at least the notifications) from
 the registration/mapping parts into separate processes.
 -}
 
+import Control.Exception (SomeException)
 import Control.Distributed.Process hiding (call, monitor, unmonitor, mask)
 import qualified Control.Distributed.Process.UnsafePrimitives as Unsafe (send)
 import qualified Control.Distributed.Process as P (monitor)
@@ -126,15 +127,18 @@ import Control.Distributed.Process.Platform.Internal.Primitives hiding (monitor)
 import Control.Distributed.Process.Platform.Internal.Types
   ( Resolvable(..)
   , Routable(..)
+  , ExitReason
   )
 import qualified Control.Distributed.Process.Platform.Internal.Primitives as PL
   ( monitor
   )
 import Control.Distributed.Process.Platform.ManagedProcess
   ( call
+  , safeCall
   , UnhandledMessagePolicy(..)
   , cast
   , handleInfo
+  , handleExit
   , reply
   , continue
   , input
@@ -187,7 +191,7 @@ import Data.Maybe (fromJust, isJust)
 import Data.Hashable
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as Map
-import Control.Distributed.Process.Platform.Internal.Containers.MultiMap (MultiMap)
+import Control.Distributed.Process.Platform.Internal.Containers.MultiMap (MultiMap, Insertable)
 import qualified Control.Distributed.Process.Platform.Internal.Containers.MultiMap as MultiMap
 import Data.HashSet (HashSet)
 import qualified Data.HashSet as Set
@@ -276,6 +280,7 @@ data KeyUpdateEventMask =
   | OnKeyLeaseExpiry     -- ^ receive an event when a key's lease expires
   deriving (Typeable, Generic, Eq, Show)
 instance Binary KeyUpdateEventMask where
+instance Hashable KeyUpdateEventMask where
 
 -- | An opaque reference used for matching monitoring events. See
 -- 'RegistryKeyMonitorNotification' for more details.
@@ -359,9 +364,9 @@ data MonitorReq k = MonitorReq !(Key k) !(Maybe [KeyUpdateEventMask])
   deriving (Typeable, Generic)
 instance (Keyable k) => Binary (MonitorReq k) where
 
-data UnmonitorReq k = UnmonitorReq !(Key k)
+data UnmonitorReq = UnmonitorReq !RegKeyMonitorRef
   deriving (Typeable, Generic)
-instance (Keyable k) => Binary (UnmonitorReq k) where
+instance Binary UnmonitorReq where
 
 -- | The result of an @await@ operation.
 data AwaitResult k =
@@ -380,7 +385,9 @@ data KMRef = KMRef { ref  :: !RegKeyMonitorRef
                    , mask :: !(Maybe [KeyUpdateEventMask])
                      -- use Nothing to monitor every event
                    }
-  deriving (Show)
+  deriving (Typeable, Generic, Show)
+instance Hashable KMRef where
+-- instance Binary KMRef where
 instance Eq KMRef where
   (KMRef a _) == (KMRef b _) = a == b
 
@@ -575,12 +582,13 @@ monitor :: (Addressable a, Keyable k)
         -> Process RegKeyMonitorRef
 monitor svr key' mask' = call svr $ MonitorReq key' mask'
 
--- | Remove a pre
-unmonitor :: (Addressable a, Keyable k)
+-- | Remove a previously set monitor.
+--
+unmonitor :: (Addressable a)
           => a
           -> RegKeyMonitorRef
           -> Process ()
-unmonitor s k = call s $ UnmonitorReq k
+unmonitor s = call s . UnmonitorReq
 
 -- | Await registration of a given key. This function will subsequently
 -- block the evaluating process until the key is registered and a registration
@@ -754,6 +762,7 @@ processDefinition =
               (input ((\((RegisterKeyReq (Key{..} :: Key k)), _ :: v) ->
                         keyType == KeyTypeProperty && (not $ isJust keyScope))))
               handleRegisterPropertyCR
+         -- TODO: Better handling of RegisterKeyReq when k (or v) is ill-typed
        , handleCast handleGiveAwayName
        , handleCallIf
               (input ((\(LookupKeyReq (Key{..} :: Key k)) ->
@@ -773,7 +782,8 @@ processDefinition =
        , handleCast handleQuery
        ]
   , infoHandlers = [handleInfo handleMonitorSignal]
-  , unhandledMessagePolicy = Drop
+--  , exitHandlers = [handleExit $ \s (_ :: ExitReason) _ -> (liftIO $ putStrLn "Exit!") >> continue s]
+--  , unhandledMessagePolicy = Drop
   } :: ProcessDefinition (State k v)
 
 handleQuery :: forall k v. (Keyable k, Serializable v)
@@ -848,7 +858,7 @@ doRegisterProperty scope state ((RegisterKeyReq Key{..}), v) = do
   void $ P.monitor scope
   notifySubscribers keyIdentity state (KeyRegistered scope)
   reply RegisteredOk $ ( (properties ^: Map.insert (scope, keyIdentity) v)
-                             $ state)
+                       $ state )
 
 handleLookupProperty :: forall k v. (Keyable k, Serializable v)
                      => State k v
@@ -920,12 +930,12 @@ handleMonitorReq state cRef (MonitorReq Key{..} mask') = do
         (KeyTypeAlias, True) -> do
           let found = Map.lookup kId (st ^. names)
           fireEvent found kId ref
-        (KeyTypeProperty, True) -> do
+        (KeyTypeProperty, _) -> do
           self <- getSelfPid
           let scope = maybe self id kScope
           let found = Map.lookup (scope, kId) (st ^. properties)
           case found of
-            Nothing -> return ()
+            Nothing -> return () -- TODO: logging or some such!?
             Just _  -> fireEvent (Just scope) kId ref
         _ -> return ()
 
@@ -942,9 +952,14 @@ handleMonitorReq state cRef (MonitorReq Key{..} mask') = do
 handleUnmonitorReq :: forall k v. (Keyable k, Serializable v)
                  => State k v
                  -> CallRef ()
-                 -> UnmonitorReq k
+                 -> UnmonitorReq
                  -> Process (ProcessReply () (State k v))
-handleUnmonitorReq state cRef (MonitorReq Key{..} mask') = undefined
+handleUnmonitorReq state cRef (UnmonitorReq ref') = do
+  let pid = fst $ unRef ref'
+  reply () $ ( (monitors ^: MultiMap.filter ((/= ref') . ref))
+             . (listeningPids ^: Set.delete pid)
+             $ state
+             )
 
 handleRegNamesLookup :: forall k v. (Keyable k, Serializable v)
                      => RegNamesReq
@@ -989,7 +1004,7 @@ handleMonitorSignal state@State{..} (ProcessMonitorNotification _ pid diedReason
                                              (st ^. monitors)
       let propSubs  = MultiMap.filterWithKey (\k _ -> Map.member (pid', k) diedProps)
                                              (st ^. monitors)
-      forM_ (Map.toList nameSubs) $ \(kIdent, KMRef{..}) -> do
+      forM_ (MultiMap.toList nameSubs) $ \(kIdent, KMRef{..}) -> do
         let kEvDied = KeyOwnerDied { diedReason = dr }
         let mRef    = RegistryKeyMonitorNotification kIdent ref
         us <- getSelfPid
@@ -1002,7 +1017,7 @@ handleMonitorSignal state@State{..} (ProcessMonitorNotification _ pid diedReason
                 if (elem OnKeyUnregistered mask')
                   then sendTo ref (mRef KeyUnregistered us)
                   else return ()
-      forM_ (Map.toList propSubs) (notifyPropSubscribers dr)
+      forM_ (MultiMap.toList propSubs) (notifyPropSubscribers dr)
       return (diedNames, diedProps)
 
     notifyPropSubscribers dr' (kIdent, KMRef{..}) = do
@@ -1025,10 +1040,10 @@ notifySubscribers :: forall k v. (Keyable k, Serializable v)
                   -> Process ()
 notifySubscribers k st ev = do
   let subscribers = MultiMap.filterWithKey (\k' _ -> k' == k) (st ^. monitors)
-  forM_ (Map.toList subscribers) $ \(_, KMRef{..}) -> do
+  forM_ (MultiMap.toList subscribers) $ \(_, KMRef{..}) -> do
     if (maybe True (elem (maskFor ev)) mask)
       then getSelfPid >>= sendTo ref . RegistryKeyMonitorNotification k ref ev
-      else return ()
+      else {- (liftIO $ putStrLn "no mask") >> -} return ()
 
 --------------------------------------------------------------------------------
 -- Utilities / Accessors                                                      --

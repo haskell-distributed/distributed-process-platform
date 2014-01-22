@@ -8,6 +8,7 @@ module Main where
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
+import Control.Distributed.Process.Platform (awaitExit)
 import Control.Distributed.Process.Platform.Service.Registry
   ( Registry(..)
   , Keyable
@@ -261,32 +262,41 @@ testMonitorName reg = do
     ]
   res `shouldBe` equalTo (Just (KeyOwnerDied DiedNormal))
 
-testUnmonitor :: ProcessId -> Process ()
-testUnmonitor reg = do
+testUnmonitor :: TestResult Bool -> Process ()
+testUnmonitor result = do
   let k = "chickens"
   let name = "poultry"
+
+  reg <- Registry.start counterReg
+  (sp, rp) <- newChan
+
   pid <- spawnLocal $ do
+    mR <- addProperty reg k (42 :: Int)
     addName reg name
-    void $ addProperty reg k (42 :: Int)
+    sendChan sp ()
     expect >>= return
+
+  () <- receiveChan rp
   mRef <- Registry.monitorProp reg k pid
 
   void $ receiveWait [
-      matchIf (\(RegistryKeyMonitorNotification k ref ev _) ->
+      matchIf (\(RegistryKeyMonitorNotification k' ref ev _) ->
                 k' == k && ref == mRef && ev == (KeyRegistered pid))
               return
     ]
 
-  unmonitor mRef
+  Registry.unmonitor reg mRef
   kill pid "goodbye!"
   awaitExit pid
+
   Nothing <- lookupName reg name
   t <- receiveTimeout (after 1 Seconds) [
-           matchIf (\(RegistryKeyMonitorNotification k ref ev _) ->
+           matchIf (\(RegistryKeyMonitorNotification k' ref ev _) ->
                     k' == k && ref == mRef && ev == (KeyRegistered pid))
                    return
          ]
-  t `shouldBe` Nothing
+  t `shouldBe` (equalTo Nothing)
+  stash result True
 
 -- testMonitorPropertyChanged :: ProcessId -> Process ()
 
@@ -295,6 +305,10 @@ testUnmonitor reg = do
 -- testMonitorPropertyOwnerChanged :: ProcessId -> Process ()
 
 -- testMonitorPropertyOwnerDied :: ProcessId -> Process ()
+
+-- testMonitorLeaseExpired :: ProcessId -> Process ()
+
+-- testMonitorPropertyLeaseExpired :: ProcessId -> Process ()
 
 testMonitorUnregistration :: ProcessId -> Process ()
 testMonitorUnregistration reg = do
@@ -420,7 +434,9 @@ tests transport = do
         , testCase "Monitoring Name Changes"
            (testProc myRegistry testMonitorName)
         , testCase "Unmonitoring (Ignoring) Changes"
-           (testProc myRegistry testUnmonitor)
+          (delayedAssertion
+           "expected the server to return only the relevant processes"
+           localNode True testUnmonitor)
         , testCase "Monitoring Registration"
            (testProc myRegistry testMonitorRegistration)
         , testCase "Awaiting Registration"
