@@ -800,6 +800,11 @@ handleQuery st@State{..} (pid, qd) = do
     shmNames = SHashMap [] $ st ^. names
     shmProps = SHashMap [] xfmProps
     shmVals  = SHashMap [] xfmVals
+
+    -- since we currently have to fold over our properties in order
+    -- answer remote queries, the sharing we do here seems a bit pointless,
+    -- however we'll be moving to a shared memory based registry soon
+
     xfmProps = Map.foldlWithKey' convProps Map.empty (st ^. properties)
     xfmVals  = Map.foldlWithKey' convVals Map.empty (st ^. properties)
 
