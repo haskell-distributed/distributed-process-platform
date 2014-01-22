@@ -325,6 +325,7 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , handleCast
   , handleCastIf
   , handleInfo
+  , handleRaw
   , handleRpcChan
   , handleRpcChanIf
   , action
@@ -410,6 +411,28 @@ chanServe :: (Serializable b)
 chanServe argv init mkDef = do
   pDef <- mkDef . ControlChannel =<< newChan
   runProcess (recvLoop pDef) argv init
+
+-- TODO: Make this work!!!!!!!!!!
+{-
+stmChanServe :: a
+             -> InitHandler a s
+             -> STM b
+             -> (StmControlChannel b -> Process (ProcessDefintion s))
+             -> Process ()
+stmChanServe = undefined
+-}
+
+-- TODO: Make this work???
+{-
+busServe :: (Serializable b, MessageMatcher m) =>
+         => a
+         -> InitHandler a s
+         -> m
+         -> (ControlPlane b -> Process (ProcessDefintion s))
+         -> Process ()
+busServe argv init m mkDef = do
+  pDef <- mkDef $ ControlPlane m
+-}
 
 -- | Wraps any /process loop/ and enforces that it adheres to the
 -- managed process' start/stop semantics, i.e., evaluating the

@@ -328,7 +328,7 @@ instance (Keyable k, Addressable a) =>
                     (a, RegKeyMonitorRef)
                     (RegistryKeyMonitorNotification k) where
   observe   (a, k) = monitor a k Nothing >>= \r -> return (a, r)
-  unobserve (a, r) = error "unmonitor a r"
+  unobserve (a, r) = error "unmonitor a r"  -- TODO: FIXME!
   observableFrom (a, r) (RegistryKeyMonitorNotification _ r' e s) = do
     pid <- resolve a
     maybe (return Nothing)
@@ -399,6 +399,8 @@ data State k v =
 
 -- Types used in \direct/ queries
 
+-- TODO: enforce QueryDirect's usage over only local channels
+
 data QueryDirect = QueryDirectNames | QueryDirectProperties | QueryDirectValues
   deriving (Typeable, Generic)
 instance Binary QueryDirect where
@@ -465,6 +467,15 @@ initIt reg () = return $ InitOk initState Infinity
 --------------------------------------------------------------------------------
 -- Client Facing API                                                          --
 --------------------------------------------------------------------------------
+
+-- | Sends a message to the process, or processes, corresponding to @key@.
+-- If Key belongs to a unique object (name or aggregated counter), this
+-- function will send a message to the corresponding process, or fail if there
+-- is no such process. If Key is for a non-unique object type (counter or
+-- property), Msg will be send to all processes that have such an object.
+--
+dispatch svr ky msg = undefined
+  -- TODO: do a local-lookup and then sendTo the target
 
 -- | Associate the calling process with the given (unique) key.
 addName :: (Addressable a, Keyable k) => a -> k -> Process RegisterKeyReply

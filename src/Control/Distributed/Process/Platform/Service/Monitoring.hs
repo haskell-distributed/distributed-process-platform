@@ -11,7 +11,7 @@
 -- Stability   :  experimental
 -- Portability :  non-portable (requires concurrency)
 --
--- The module provides a primitive node monitoring capability, implemented as
+-- This module provides a primitive node monitoring capability, implemented as
 -- a /distributed-process Management Agent/. Once the 'nodeMonitor' agent is
 -- started, calling 'monitorNodes' will ensure that whenever the local node
 -- detects a new network-transport connection (from another cloud haskell node),
@@ -31,10 +31,7 @@ module Control.Distributed.Process.Platform.Service.Monitoring
   ) where
 
 import Control.DeepSeq (NFData)
-import Control.Distributed.Process
--- TODO: the internals should be hidden and Process.hs needs to re-export
--- the entire NodeId object in reality.
-import Control.Distributed.Process.Internal.Types (NodeId(..))
+import Control.Distributed.Process  -- NB: requires NodeId(..) to be exported!
 import Control.Distributed.Process.Management
   ( MxEvent(MxConnected, MxDisconnected)
   , MxAgentId(..)
@@ -83,7 +80,7 @@ instance NFData NodeDown where
 
 -- | The @MxAgentId@ for the node monitoring agent.
 nodeMonitorAgentId :: MxAgentId
-nodeMonitorAgentId = MxAgentId "service.monitoring.node-monitor"
+nodeMonitorAgentId = MxAgentId "service.monitoring.nodes"
 
 -- | Start monitoring node connection/disconnection events. When a
 -- connection event occurs, the calling process will receive a message
