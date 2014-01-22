@@ -785,8 +785,6 @@ processDefinition =
        , handleCast handleQuery
        ]
   , infoHandlers = [handleInfo handleMonitorSignal]
---  , exitHandlers = [handleExit $ \s (_ :: ExitReason) _ -> (liftIO $ putStrLn "Exit!") >> continue s]
---  , unhandledMessagePolicy = Drop
   } :: ProcessDefinition (State k v)
 
 handleQuery :: forall k v. (Keyable k, Serializable v)
