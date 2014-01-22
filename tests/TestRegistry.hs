@@ -358,7 +358,26 @@ testMonitorPropertyChanged result = do
 
   stash result (kr /= Nothing)
 
--- testMonitorPropertyOwnerDied :: ProcessId -> Process ()
+testMonitorPropertyOwnerDied :: ProcessId -> Process ()
+testMonitorPropertyOwnerDied reg = do
+  let k = "foo.bar"
+  pid <- spawnSignalled (addProperty reg k ()) $ const $ do
+    expect >>= return
+
+  mRef <- Registry.monitorProp reg k pid
+  kill pid "goodbye!"
+
+  -- we /must/ receive a monitor notification first, for the pre-existing
+  -- key and only then will we let the worker move on and update the value
+  r <- receiveTimeout 1000000 [
+      matchIf (\(RegistryKeyMonitorNotification k' ref ev _) ->
+                k' == k && ref == mRef && ev /= (KeyRegistered pid))
+              (\(RegistryKeyMonitorNotification _ _ ev _) ->
+                return ev)
+    ]
+  case r of
+    Just (KeyOwnerDied (DiedException _)) -> return ()
+    _ -> (liftIO $ putStrLn (show r)) >> return ()
 
 -- testMonitorLeaseExpired :: ProcessId -> Process ()
 
@@ -497,6 +516,8 @@ tests transport = do
           (delayedAssertion
            "expected the server to send additional notifications for each change"
            localNode True testMonitorPropertyChanged)
+        , testCase "Monitoring Property Owner Death"
+           (testProc myRegistry testMonitorPropertyOwnerDied)
         , testCase "Monitoring Registration"
            (testProc myRegistry testMonitorRegistration)
         , testCase "Awaiting Registration"
