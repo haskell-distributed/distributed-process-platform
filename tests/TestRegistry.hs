@@ -6,8 +6,10 @@
 module Main where
 
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
+import Control.Concurrent.Utils (Lock, Exclusive(..), Synchronised(..))
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
+import Control.Distributed.Process.Platform (awaitExit, spawnSignalled)
 import Control.Distributed.Process.Platform.Service.Registry
   ( Registry(..)
   , Keyable
@@ -94,8 +96,6 @@ testAddRemoteProperty result = do
   RegisteredOk <- registerValue reg p "ducks" (39 :: Int)
   getSelfPid >>= send p
   expect >>= stash result
-
--- TODO: WE NEED MORE TESTS FOR PROPERTY MONITORING NOTIFICATIONS
 
 testFindByPropertySet :: TestResult Bool -> Process ()
 testFindByPropertySet result = do
@@ -261,6 +261,128 @@ testMonitorName reg = do
     ]
   res `shouldBe` equalTo (Just (KeyOwnerDied DiedNormal))
 
+testMonitorNameChange :: ProcessId -> Process ()
+testMonitorNameChange reg = do
+  let k = "proc.name.foo"
+
+  lock <- liftIO $ new :: Process Lock
+  acquire lock
+  testPid <- getSelfPid
+
+  pid <- spawnSignalled (addName reg k) $ const $ do
+    link testPid
+    synchronised lock $ giveAwayName reg k testPid
+    expect >>= return
+
+  -- at this point, we know the child has grabbed the name k for itself
+  mRef <- Registry.monitorName reg k
+  release lock
+
+  ev <- receiveWait [ matchIf (\(RegistryKeyMonitorNotification k' ref _ _) ->
+                                  k' == k && ref == mRef)
+                                (\(RegistryKeyMonitorNotification _ _ ev' _) ->
+                                  return ev') ]
+  ev `shouldBe` equalTo (KeyOwnerChanged pid testPid)
+
+testUnmonitor :: TestResult Bool -> Process ()
+testUnmonitor result = do
+  let k = "chickens"
+  let name = "poultry"
+
+  reg <- Registry.start counterReg
+  (sp, rp) <- newChan
+
+  pid <- spawnLocal $ do
+    void $ addProperty reg k (42 :: Int)
+    addName reg name
+    sendChan sp ()
+    expect >>= return
+
+  () <- receiveChan rp
+  mRef <- Registry.monitorProp reg k pid
+
+  void $ receiveWait [
+      matchIf (\(RegistryKeyMonitorNotification k' ref ev _) ->
+                k' == k && ref == mRef && ev == (KeyRegistered pid))
+              return
+    ]
+
+  Registry.unmonitor reg mRef
+  kill pid "goodbye!"
+  awaitExit pid
+
+  Nothing <- lookupName reg name
+  t <- receiveTimeout (after 1 Seconds) [
+           matchIf (\(RegistryKeyMonitorNotification k' ref ev _) ->
+                    k' == k && ref == mRef && ev == (KeyRegistered pid))
+                   return
+         ]
+  t `shouldBe` (equalTo Nothing)
+  stash result True
+
+testMonitorPropertyChanged :: TestResult Bool -> Process ()
+testMonitorPropertyChanged result = do
+  let k = "chickens"
+  let name = "poultry"
+
+  lock <- liftIO $ new :: Process Lock
+  reg <- Registry.start counterReg
+
+  -- yes, using the lock here without exception handling is risky...
+  acquire lock
+
+  pid <- spawnSignalled (addProperty reg k (42 :: Int)) $ const $ do
+    addName reg name
+    synchronised lock $ addProperty reg k (45 :: Int)
+    expect >>= return
+
+  -- at this point, the worker has already registered 42 (since we used
+  -- spawnSignalled to start it) and is waiting for us to unlock...
+  mRef <- Registry.monitorProp reg k pid
+
+  -- we /must/ receive a monitor notification first, for the pre-existing
+  -- key and only then will we let the worker move on and update the value
+  void $ receiveWait [
+      matchIf (\(RegistryKeyMonitorNotification k' ref ev _) ->
+                k' == k && ref == mRef && ev == (KeyRegistered pid))
+              return
+    ]
+
+  release lock
+
+  kr <- receiveTimeout 1000000 [
+      matchIf (\(RegistryKeyMonitorNotification k' ref ev _) ->
+                k' == k && ref == mRef && ev == (KeyRegistered pid))
+              return
+    ]
+
+  stash result (kr /= Nothing)
+
+testMonitorPropertyOwnerDied :: ProcessId -> Process ()
+testMonitorPropertyOwnerDied reg = do
+  let k = "foo.bar"
+  pid <- spawnSignalled (addProperty reg k ()) $ const $ do
+    expect >>= return
+
+  mRef <- Registry.monitorProp reg k pid
+  kill pid "goodbye!"
+
+  -- we /must/ receive a monitor notification first, for the pre-existing
+  -- key and only then will we let the worker move on and update the value
+  r <- receiveTimeout 1000000 [
+      matchIf (\(RegistryKeyMonitorNotification k' ref ev _) ->
+                k' == k && ref == mRef && ev /= (KeyRegistered pid))
+              (\(RegistryKeyMonitorNotification _ _ ev _) ->
+                return ev)
+    ]
+  case r of
+    Just (KeyOwnerDied (DiedException _)) -> return ()
+    _ -> (liftIO $ putStrLn (show r)) >> return ()
+
+-- testMonitorLeaseExpired :: ProcessId -> Process ()
+
+-- testMonitorPropertyLeaseExpired :: ProcessId -> Process ()
+
 testMonitorUnregistration :: ProcessId -> Process ()
 testMonitorUnregistration reg = do
   (sp, rp) <- newChan
@@ -384,6 +506,18 @@ tests transport = do
            (testProc myRegistry testProcessDeathHandling)
         , testCase "Monitoring Name Changes"
            (testProc myRegistry testMonitorName)
+        , testCase "Monitoring Name Changes (KeyOwnerChanged)"
+           (testProc myRegistry testMonitorNameChange)
+        , testCase "Unmonitoring (Ignoring) Changes"
+          (delayedAssertion
+           "expected no further notifications after 'unmonitor' was called"
+           localNode True testUnmonitor)
+        , testCase "Monitoring Property Changes/Updates"
+          (delayedAssertion
+           "expected the server to send additional notifications for each change"
+           localNode True testMonitorPropertyChanged)
+        , testCase "Monitoring Property Owner Death"
+           (testProc myRegistry testMonitorPropertyOwnerDied)
         , testCase "Monitoring Registration"
            (testProc myRegistry testMonitorRegistration)
         , testCase "Awaiting Registration"
