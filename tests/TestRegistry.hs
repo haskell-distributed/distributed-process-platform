@@ -97,8 +97,6 @@ testAddRemoteProperty result = do
   getSelfPid >>= send p
   expect >>= stash result
 
--- TODO: WE NEED MORE TESTS FOR PROPERTY MONITORING NOTIFICATIONS
-
 testFindByPropertySet :: TestResult Bool -> Process ()
 testFindByPropertySet result = do
   reg <- Registry.start counterReg
@@ -263,6 +261,29 @@ testMonitorName reg = do
     ]
   res `shouldBe` equalTo (Just (KeyOwnerDied DiedNormal))
 
+testMonitorNameChange :: ProcessId -> Process ()
+testMonitorNameChange reg = do
+  let k = "proc.name.foo"
+
+  lock <- liftIO $ new :: Process Lock
+  acquire lock
+  testPid <- getSelfPid
+
+  pid <- spawnSignalled (addName reg k) $ const $ do
+    link testPid
+    synchronised lock $ giveAwayName reg k testPid
+    expect >>= return
+
+  -- at this point, we know the child has grabbed the name k for itself
+  mRef <- Registry.monitorName reg k
+  release lock
+
+  ev <- receiveWait [ matchIf (\(RegistryKeyMonitorNotification k' ref _ _) ->
+                                  k' == k && ref == mRef)
+                                (\(RegistryKeyMonitorNotification _ _ ev' _) ->
+                                  return ev') ]
+  ev `shouldBe` equalTo (KeyOwnerChanged pid testPid)
+
 testUnmonitor :: TestResult Bool -> Process ()
 testUnmonitor result = do
   let k = "chickens"
@@ -336,10 +357,6 @@ testMonitorPropertyChanged result = do
     ]
 
   stash result (kr /= Nothing)
-
--- testMonitorPropertySet :: ProcessId -> Process ()
-
--- testMonitorPropertyOwnerChanged :: ProcessId -> Process ()
 
 -- testMonitorPropertyOwnerDied :: ProcessId -> Process ()
 
@@ -470,6 +487,8 @@ tests transport = do
            (testProc myRegistry testProcessDeathHandling)
         , testCase "Monitoring Name Changes"
            (testProc myRegistry testMonitorName)
+        , testCase "Monitoring Name Changes (KeyOwnerChanged)"
+           (testProc myRegistry testMonitorNameChange)
         , testCase "Unmonitoring (Ignoring) Changes"
           (delayedAssertion
            "expected no further notifications after 'unmonitor' was called"

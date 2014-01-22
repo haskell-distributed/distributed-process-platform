@@ -354,7 +354,7 @@ data RegisterKeyReply =
 instance Binary RegisterKeyReply where
 
 -- | A cast message used to atomically give a name/key away to another process.
-data GiveAwayName k = GiveAwayName !(Key k)
+data GiveAwayName k = GiveAwayName !ProcessId !(Key k)
   deriving (Typeable, Generic)
 instance (Keyable k) => Binary (GiveAwayName k) where
 deriving instance (Keyable k) => Eq (GiveAwayName k)
@@ -492,7 +492,9 @@ addName s n = getSelfPid >>= registerName s n
 -- if the key is not already registered or the key is already registered to the
 -- supplied process' @ProcessId@.
 giveAwayName :: (Addressable a, Keyable k) => a -> k -> ProcessId -> Process ()
-giveAwayName s n p = cast s $ GiveAwayName $ Key n KeyTypeAlias (Just p)
+giveAwayName s n p = do
+  us <- getSelfPid
+  cast s $ GiveAwayName p $ Key n KeyTypeAlias (Just us)
 
 -- | Associate the given (non-unique) property with the current process.
 addProperty :: (Addressable a, Keyable k, Serializable v)
@@ -897,17 +899,16 @@ handleGiveAwayName :: forall k v. (Keyable k, Serializable v)
                    => State k v
                    -> GiveAwayName k
                    -> Process (ProcessAction (State k v))
-handleGiveAwayName state (GiveAwayName Key{..}) = do
+handleGiveAwayName state (GiveAwayName newPid Key{..}) = do
   maybe (continue state) giveAway $ Map.lookup keyIdentity (state ^. names)
   where
     giveAway pid = do
       let scope = fromJust keyScope
       case (pid == scope) of
-        True  -> continue state
-        False -> do
-          notifySubscribers keyIdentity state KeyUnregistered
-          let state' = ((names ^: Map.insert keyIdentity scope) $ state)
-          notifySubscribers keyIdentity state (KeyRegistered scope)
+        False -> continue state
+        True -> do
+          let state' = ((names ^: Map.insert keyIdentity newPid) $ state)
+          notifySubscribers keyIdentity state (KeyOwnerChanged pid newPid)
           continue state'
 
 handleMonitorReq :: forall k v. (Keyable k, Serializable v)
