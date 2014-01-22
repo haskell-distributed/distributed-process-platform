@@ -6,9 +6,10 @@
 module Main where
 
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
+import Control.Concurrent.Utils (Lock, Exclusive(..), Synchronised(..))
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
-import Control.Distributed.Process.Platform (awaitExit)
+import Control.Distributed.Process.Platform (awaitExit, spawnSignalled)
 import Control.Distributed.Process.Platform.Service.Registry
   ( Registry(..)
   , Keyable
@@ -271,7 +272,7 @@ testUnmonitor result = do
   (sp, rp) <- newChan
 
   pid <- spawnLocal $ do
-    mR <- addProperty reg k (42 :: Int)
+    void $ addProperty reg k (42 :: Int)
     addName reg name
     sendChan sp ()
     expect >>= return
@@ -298,7 +299,43 @@ testUnmonitor result = do
   t `shouldBe` (equalTo Nothing)
   stash result True
 
--- testMonitorPropertyChanged :: ProcessId -> Process ()
+testMonitorPropertyChanged :: TestResult Bool -> Process ()
+testMonitorPropertyChanged result = do
+  let k = "chickens"
+  let name = "poultry"
+
+  lock <- liftIO $ new :: Process Lock
+  reg <- Registry.start counterReg
+
+  -- yes, using the lock here without exception handling is risky...
+  acquire lock
+
+  pid <- spawnSignalled (addProperty reg k (42 :: Int)) $ const $ do
+    addName reg name
+    synchronised lock $ addProperty reg k (45 :: Int)
+    expect >>= return
+
+  -- at this point, the worker has already registered 42 (since we used
+  -- spawnSignalled to start it) and is waiting for us to unlock...
+  mRef <- Registry.monitorProp reg k pid
+
+  -- we /must/ receive a monitor notification first, for the pre-existing
+  -- key and only then will we let the worker move on and update the value
+  void $ receiveWait [
+      matchIf (\(RegistryKeyMonitorNotification k' ref ev _) ->
+                k' == k && ref == mRef && ev == (KeyRegistered pid))
+              return
+    ]
+
+  release lock
+
+  kr <- receiveTimeout 1000000 [
+      matchIf (\(RegistryKeyMonitorNotification k' ref ev _) ->
+                k' == k && ref == mRef && ev == (KeyRegistered pid))
+              return
+    ]
+
+  stash result (kr /= Nothing)
 
 -- testMonitorPropertySet :: ProcessId -> Process ()
 
@@ -435,8 +472,12 @@ tests transport = do
            (testProc myRegistry testMonitorName)
         , testCase "Unmonitoring (Ignoring) Changes"
           (delayedAssertion
-           "expected the server to return only the relevant processes"
+           "expected no further notifications after 'unmonitor' was called"
            localNode True testUnmonitor)
+        , testCase "Monitoring Property Changes/Updates"
+          (delayedAssertion
+           "expected the server to send additional notifications for each change"
+           localNode True testMonitorPropertyChanged)
         , testCase "Monitoring Registration"
            (testProc myRegistry testMonitorRegistration)
         , testCase "Awaiting Registration"
