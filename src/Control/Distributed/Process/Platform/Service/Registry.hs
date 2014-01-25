@@ -328,20 +328,6 @@ instance (Keyable k) => Binary (RegistryKeyMonitorNotification k) where
 deriving instance (Keyable k) => Eq (RegistryKeyMonitorNotification k)
 deriving instance (Keyable k) => Show (RegistryKeyMonitorNotification k)
 
-instance (Keyable k, Addressable a) =>
-         Observable (a, Key k)
-                    (a, RegKeyMonitorRef)
-                    (RegistryKeyMonitorNotification k) where
-  observe   (a, k) = monitor a k Nothing >>= \r -> return (a, r)
-  unobserve (a, r) = error "unmonitor a r"  -- TODO: FIXME!
-  observableFrom (a, r) (RegistryKeyMonitorNotification _ r' e s) = do
-    pid <- resolve a
-    maybe (return Nothing)
-          (\p ->
-            case p == s && r == r' of
-              True  -> return $ Just $ reason e
-              False -> return Nothing) pid
-
 data RegisterKeyReq k = RegisterKeyReq !(Key k)
   deriving (Typeable, Generic)
 instance (Serializable k) => Binary (RegisterKeyReq k) where
