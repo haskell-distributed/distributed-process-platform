@@ -9,7 +9,11 @@ import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
 import Control.Concurrent.Utils (Lock, Exclusive(..), Synchronised(..))
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
-import Control.Distributed.Process.Platform (awaitExit, spawnSignalled)
+import Control.Distributed.Process.Platform
+  ( awaitExit
+  , spawnSignalled
+  , Killable(..)
+  )
 import Control.Distributed.Process.Platform.Service.Registry
   ( Registry(..)
   , Keyable
@@ -59,36 +63,34 @@ import TestUtils
 
 import qualified Network.Transport as NT
 
-myRegistry :: Registry String ()
-myRegistry = Registry
+myRegistry :: Process (Registry String ())
+myRegistry = Registry.start
 
-counterReg :: Registry String Int
-counterReg = Registry
+counterReg :: Process (Registry String Int)
+counterReg = Registry.start
 
-withRegistry :: forall k v. (Keyable k, Serializable v)
-             => LocalNode
-             -> Registry k v
-             -> (ProcessId -> Process ())
+withRegistry :: LocalNode
+             -> (Registry String () -> Process ())
              -> Assertion
-withRegistry node reg proc = do
+withRegistry node proc = do
   runProcess node $ do
-    reg' <- Registry.start reg
-    (proc reg') `finally` (kill reg' "goodbye")
+    reg' <- myRegistry
+    (proc reg') `finally` (killProc reg' "goodbye")
 
 testAddLocalName :: TestResult RegisterKeyReply -> Process ()
 testAddLocalName result = do
-  reg <- Registry.start myRegistry
+  reg <- myRegistry
   stash result =<< addName reg "foobar"
 
 testAddLocalProperty :: TestResult (Maybe Int) -> Process ()
 testAddLocalProperty result = do
-  reg <- Registry.start counterReg
+  reg <- counterReg
   addProperty reg "chickens" (42 :: Int)
   stash result =<< lookupProperty reg "chickens"
 
 testAddRemoteProperty :: TestResult Int -> Process ()
 testAddRemoteProperty result = do
-  reg <- Registry.start counterReg
+  reg <- counterReg
   p <- spawnLocal $ do
     pid <- expect
     Just i <- lookupProperty reg "ducks" :: Process (Maybe Int)
@@ -99,7 +101,7 @@ testAddRemoteProperty result = do
 
 testFindByPropertySet :: TestResult Bool -> Process ()
 testFindByPropertySet result = do
-  reg <- Registry.start counterReg
+  reg <- counterReg
   p1 <- spawnLocal $ addProperty reg "animals" (1 :: Int) >> expect >>= return
   p2 <- spawnLocal $ addProperty reg "animals" (1 :: Int) >> expect >>= return
   sleep $ seconds 1
@@ -112,7 +114,7 @@ testFindByPropertySet result = do
 testFindByPropertyValueSet :: TestResult Bool -> Process ()
 testFindByPropertyValueSet result = do
   us <- getSelfPid
-  reg <- Registry.start counterReg
+  reg <- counterReg
   p1 <- spawnLocal $ link us >> addProperty reg "animals" (1 :: Int) >> expect >>= return
   _  <- spawnLocal $ link us >> addProperty reg "animals" (2 :: Int) >> expect >>= return
   p3 <- spawnLocal $ link us >> addProperty reg "animals" (1 :: Int) >> expect >>= return
@@ -124,14 +126,14 @@ testFindByPropertyValueSet result = do
   found `shouldContain` p3
   stash result $ length found == 2
 
-testCheckLocalName :: ProcessId -> Process ()
+testCheckLocalName :: Registry String () -> Process ()
 testCheckLocalName reg = do
   void $ addName reg "fwibble"
   fwibble <- lookupName reg "fwibble"
   selfPid <- getSelfPid
   fwibble `shouldBe` equalTo (Just selfPid)
 
-testGiveAwayName :: ProcessId -> Process ()
+testGiveAwayName :: Registry String () -> Process ()
 testGiveAwayName reg = do
   testPid <- getSelfPid
   void $ addName reg "cat"
@@ -140,7 +142,7 @@ testGiveAwayName reg = do
   cat <- lookupName reg "cat"
   cat `shouldBe` equalTo (Just pid)
 
-testMultipleRegistrations :: ProcessId -> Process ()
+testMultipleRegistrations :: Registry String () -> Process ()
 testMultipleRegistrations reg = do
   self <- getSelfPid
   forM_ names (addName reg)
@@ -150,7 +152,7 @@ testMultipleRegistrations reg = do
   where
     names = ["foo", "bar", "baz"]
 
-testDuplicateRegistrations :: ProcessId -> Process ()
+testDuplicateRegistrations :: Registry String () -> Process ()
 testDuplicateRegistrations reg = do
   void $ addName reg "foobar"
   RegisteredOk <- addName reg "foobar"
@@ -158,7 +160,7 @@ testDuplicateRegistrations reg = do
   result <- registerName reg "foobar" pid
   result `shouldBe` equalTo AlreadyRegistered
 
-testUnregisterName :: ProcessId -> Process ()
+testUnregisterName :: Registry String () -> Process ()
 testUnregisterName reg = do
   self <- getSelfPid
   void $ addName reg "fwibble"
@@ -174,12 +176,12 @@ testUnregisterName reg = do
   fwobble <- lookupName reg "fwobble"
   fwobble `shouldBe` equalTo (Just self)
 
-testUnregisterUnknownName :: ProcessId -> Process ()
+testUnregisterUnknownName :: Registry String () -> Process ()
 testUnregisterUnknownName reg = do
   result <- unregisterName reg "no.such.name"
   result `shouldBe` equalTo UnregisterKeyNotFound
 
-testUnregisterAnothersName :: ProcessId -> Process ()
+testUnregisterAnothersName :: Registry String () -> Process ()
 testUnregisterAnothersName reg = do
   (sp, rp) <- newChan
   pid <- spawnLocal $ do
@@ -192,7 +194,7 @@ testUnregisterAnothersName reg = do
   unreg <- unregisterName reg "proc.name"
   unreg `shouldBe` equalTo UnregisterInvalidKey
 
-testProcessDeathHandling :: ProcessId -> Process ()
+testProcessDeathHandling :: Registry String () -> Process ()
 testProcessDeathHandling reg = do
   (sp, rp) <- newChan
   pid <- spawnLocal $ do
@@ -216,7 +218,7 @@ testProcessDeathHandling reg = do
   regNames' <- registeredNames reg pid
   regNames' `shouldBe` equalTo ([] :: [String])
 
-testLocalRegNamesFold :: ProcessId -> Process ()
+testLocalRegNamesFold :: Registry String () -> Process ()
 testLocalRegNamesFold reg = do
   parent <- getSelfPid
   forM_ [1..1000] $ \(i :: Int) -> spawnLocal $ do
@@ -230,7 +232,7 @@ testLocalRegNamesFold reg = do
       void $ receiveWait [ matchIf (\(i :: Int) -> i == 1000) (\_ -> return ()) ]
       sleep $ milliSeconds 150
 
-testLocalQueryNamesFold :: ProcessId -> Process ()
+testLocalQueryNamesFold :: Registry String () -> Process ()
 testLocalQueryNamesFold reg = do
   pids <- forM [1..1000] $ \(i :: Int) -> spawnLocal $ do
     addName reg (show i) >> expect :: Process ()
@@ -239,11 +241,11 @@ testLocalQueryNamesFold reg = do
     return $ Foldable.foldl (\acc pid -> (pid:acc)) [] sh
   (List.sort ns) `shouldBe` equalTo pids
   where
-    waitRegs :: ProcessId -> Int -> Process ()
+    waitRegs :: Registry String () -> Int -> Process ()
     waitRegs _    0 = return ()
     waitRegs reg' n = await reg' (show n) >> waitRegs reg' (n - 1)
 
-testMonitorName :: ProcessId -> Process ()
+testMonitorName :: Registry String () -> Process ()
 testMonitorName reg = do
   (sp, rp) <- newChan
   pid <- spawnLocal $ do
@@ -261,7 +263,7 @@ testMonitorName reg = do
     ]
   res `shouldBe` equalTo (Just (KeyOwnerDied DiedNormal))
 
-testMonitorNameChange :: ProcessId -> Process ()
+testMonitorNameChange :: Registry String () -> Process ()
 testMonitorNameChange reg = do
   let k = "proc.name.foo"
 
@@ -289,7 +291,7 @@ testUnmonitor result = do
   let k = "chickens"
   let name = "poultry"
 
-  reg <- Registry.start counterReg
+  reg <- counterReg
   (sp, rp) <- newChan
 
   pid <- spawnLocal $ do
@@ -326,7 +328,7 @@ testMonitorPropertyChanged result = do
   let name = "poultry"
 
   lock <- liftIO $ new :: Process Lock
-  reg <- Registry.start counterReg
+  reg <- counterReg
 
   -- yes, using the lock here without exception handling is risky...
   acquire lock
@@ -358,7 +360,7 @@ testMonitorPropertyChanged result = do
 
   stash result (kr /= Nothing)
 
-testMonitorPropertyOwnerDied :: ProcessId -> Process ()
+testMonitorPropertyOwnerDied :: Registry String () -> Process ()
 testMonitorPropertyOwnerDied reg = do
   let k = "foo.bar"
   pid <- spawnSignalled (addProperty reg k ()) $ const $ do
@@ -383,7 +385,7 @@ testMonitorPropertyOwnerDied reg = do
 
 -- testMonitorPropertyLeaseExpired :: ProcessId -> Process ()
 
-testMonitorUnregistration :: ProcessId -> Process ()
+testMonitorUnregistration :: Registry String () -> Process ()
 testMonitorUnregistration reg = do
   (sp, rp) <- newChan
   pid <- spawnLocal $ do
@@ -404,7 +406,7 @@ testMonitorUnregistration reg = do
     ]
   res `shouldBe` equalTo (Just KeyUnregistered)
 
-testMonitorRegistration :: ProcessId -> Process ()
+testMonitorRegistration :: Registry String () -> Process ()
 testMonitorRegistration reg = do
   kRef <- Registry.monitorName reg "my.proc"
   pid <- spawnLocal $ do
@@ -417,7 +419,7 @@ testMonitorRegistration reg = do
     ]
   res `shouldBe` equalTo (Just (KeyRegistered pid))
 
-testAwaitRegistration :: ProcessId -> Process ()
+testAwaitRegistration :: Registry String () -> Process ()
 testAwaitRegistration reg = do
   pid <- spawnLocal $ do
     void $ addName reg "foo.bar"
@@ -425,7 +427,7 @@ testAwaitRegistration reg = do
   res <- awaitTimeout reg (Delay $ within 5 Seconds) "foo.bar"
   res `shouldBe` equalTo (RegisteredName pid "foo.bar")
 
-testAwaitRegistrationNoTimeout :: ProcessId -> Process ()
+testAwaitRegistrationNoTimeout :: Registry String () -> Process ()
 testAwaitRegistrationNoTimeout reg = do
   parent <- getSelfPid
   barrier <- liftIO $ newEmptyMVar
@@ -437,12 +439,12 @@ testAwaitRegistrationNoTimeout reg = do
   void $ addName reg "baz.bog"
   liftIO $ takeMVar barrier >>= return
 
-testAwaitServerDied :: ProcessId -> Process ()
+testAwaitServerDied :: Registry String () -> Process ()
 testAwaitServerDied reg = do
   result <- liftIO $ newEmptyMVar
   _ <- spawnLocal $ await reg "bobobob" >>= stash result
   sleep $ milliSeconds 250
-  kill reg "bye!"
+  killProc reg "bye!"
   res <- liftIO $ takeMVar result
   case res of
     ServerUnreachable (DiedException _) -> return ()
@@ -460,19 +462,19 @@ tests transport = do
             "expected the server to return the incremented state as 7"
             localNode RegisteredOk testAddLocalName)
         , testCase "Give Away Name"
-           (testProc myRegistry testGiveAwayName)
+           (testProc testGiveAwayName)
         , testCase "Verified Registration"
-           (testProc myRegistry testCheckLocalName)
+           (testProc testCheckLocalName)
         , testCase "Single Process, Multiple Registered Names"
-           (testProc myRegistry testMultipleRegistrations)
+           (testProc testMultipleRegistrations)
         , testCase "Duplicate Registration Fails"
-           (testProc myRegistry testDuplicateRegistrations)
+           (testProc testDuplicateRegistrations)
         , testCase "Unregister Own Name"
-           (testProc myRegistry testUnregisterName)
+           (testProc testUnregisterName)
         , testCase "Unregister Unknown Name"
-           (testProc myRegistry testUnregisterUnknownName)
+           (testProc testUnregisterUnknownName)
         , testCase "Unregister Someone Else's Name"
-           (testProc myRegistry testUnregisterAnothersName)
+           (testProc testUnregisterAnothersName)
         ]
       , testGroup "Properties"
         [
@@ -488,9 +490,9 @@ tests transport = do
       , testGroup "Queries"
         [
           testCase "Folding Over Registered Names (Locally)"
-           (testProc myRegistry testLocalRegNamesFold)
+           (testProc testLocalRegNamesFold)
         , testCase "Querying Registered Names (Locally)"
-           (testProc myRegistry testLocalQueryNamesFold)
+           (testProc testLocalQueryNamesFold)
         , testCase "Querying Process Where Property Exists (Locally)"
            (delayedAssertion
             "expected the server to return only the relevant processes"
@@ -503,11 +505,11 @@ tests transport = do
       , testGroup "Named Process Monitoring/Tracking"
         [
           testCase "Process Death Results In Unregistration"
-           (testProc myRegistry testProcessDeathHandling)
+           (testProc testProcessDeathHandling)
         , testCase "Monitoring Name Changes"
-           (testProc myRegistry testMonitorName)
+           (testProc testMonitorName)
         , testCase "Monitoring Name Changes (KeyOwnerChanged)"
-           (testProc myRegistry testMonitorNameChange)
+           (testProc testMonitorNameChange)
         , testCase "Unmonitoring (Ignoring) Changes"
           (delayedAssertion
            "expected no further notifications after 'unmonitor' was called"
@@ -517,17 +519,17 @@ tests transport = do
            "expected the server to send additional notifications for each change"
            localNode True testMonitorPropertyChanged)
         , testCase "Monitoring Property Owner Death"
-           (testProc myRegistry testMonitorPropertyOwnerDied)
+           (testProc testMonitorPropertyOwnerDied)
         , testCase "Monitoring Registration"
-           (testProc myRegistry testMonitorRegistration)
+           (testProc testMonitorRegistration)
         , testCase "Awaiting Registration"
-           (testProc myRegistry testAwaitRegistration)
+           (testProc testAwaitRegistration)
         , testCase "Await without timeout"
-           (testProc myRegistry testAwaitRegistrationNoTimeout)
+           (testProc testAwaitRegistrationNoTimeout)
         , testCase "Server Died During Await"
-           (testProc myRegistry testAwaitServerDied)
+           (testProc testAwaitServerDied)
         , testCase "Monitoring Unregistration"
-           (testProc myRegistry testMonitorUnregistration)
+           (testProc testMonitorUnregistration)
         ]
     ]
 
