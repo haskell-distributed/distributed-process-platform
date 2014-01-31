@@ -135,7 +135,6 @@ import Control.Distributed.Process.Platform.ManagedProcess
   , input
   , defaultProcess
   , prioritised
-  , InitHandler
   , InitResult(..)
   , ProcessAction
   , ProcessReply
@@ -148,7 +147,8 @@ import qualified Control.Distributed.Process.Platform.ManagedProcess as MP
   ( pserve
   )
 import Control.Distributed.Process.Platform.ManagedProcess.Server
-  ( handleCallIf
+  ( handleCall
+  , handleCallIf
   , handleCallFrom
   , handleCallFromIf
   , handleCast
@@ -312,9 +312,11 @@ data KeyUpdateEvent =
   deriving (Typeable, Generic, Eq, Show)
 instance Binary KeyUpdateEvent where
 
+{-
 reason :: KeyUpdateEvent -> DiedReason
 reason (KeyOwnerDied dr) = dr
 reason _                 = DiedNormal
+-}
 
 -- | This message is delivered to processes which are monioring a
 -- registry key. The opaque monitor reference will match (i.e., be equal
@@ -773,7 +775,7 @@ processDefinition =
                         keyType == KeyTypeAlias && (isJust keyScope))))
               handleUnregisterName
        , handleCallFrom handleMonitorReq
-       , handleCallFrom handleUnmonitorReq
+       , handleCall     handleUnmonitorReq
        , Restricted.handleCall handleRegNamesLookup
        , handleCast handleQuery
        ]
@@ -949,10 +951,9 @@ handleMonitorReq state cRef (MonitorReq Key{..} mask') = do
 
 handleUnmonitorReq :: forall k v. (Keyable k, Serializable v)
                  => State k v
-                 -> CallRef ()
                  -> UnmonitorReq
                  -> Process (ProcessReply () (State k v))
-handleUnmonitorReq state cRef (UnmonitorReq ref') = do
+handleUnmonitorReq state (UnmonitorReq ref') = do
   let pid = fst $ unRef ref'
   reply () $ ( (monitors ^: MultiMap.filter ((/= ref') . ref))
              . (listeningPids ^: Set.delete pid)

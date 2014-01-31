@@ -65,6 +65,8 @@ library
                    Control.Distributed.Process.Platform.Service.Registry,
                    Control.Distributed.Process.Platform.Service.SystemLog,
                    Control.Distributed.Process.Platform.Supervisor,
+                   Control.Distributed.Process.Platform.Task.Pool,
+                   Control.Distributed.Process.Platform.Task.Pool.WorkerPool,
                    Control.Distributed.Process.Platform.Task.Queue.BlockingQueue,
                    Control.Distributed.Process.Platform.Test,
                    Control.Distributed.Process.Platform.Time,
@@ -77,10 +79,11 @@ library
                    Control.Distributed.Process.Platform.Execution.Exchange.Broadcast,
                    Control.Distributed.Process.Platform.Execution.Exchange.Internal,
                    Control.Distributed.Process.Platform.Execution.Exchange.Router,
+                   Control.Distributed.Process.Platform.Internal.IdentityPool,
                    Control.Distributed.Process.Platform.Internal.Primitives,
-                   Control.Distributed.Process.Platform.Internal.Types,
                    Control.Distributed.Process.Platform.Internal.Queue.SeqQ,
                    Control.Distributed.Process.Platform.Internal.Queue.PriorityQ
+                   Control.Distributed.Process.Platform.Internal.Types,
                    Control.Distributed.Process.Platform.Internal.Unsafe,
                    Control.Distributed.Process.Platform.ManagedProcess.Internal.Types,
                    Control.Distributed.Process.Platform.ManagedProcess.Internal.GenProcess

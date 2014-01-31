@@ -8,6 +8,7 @@ module Control.Distributed.Process.Platform.Internal.Containers.MultiMap
   , Insertable
   , empty
   , insert
+  , delete
   , member
   , lookup
   , filter
@@ -50,6 +51,14 @@ insert k' v' M{..} =
     Nothing -> M $ Map.insert k' (Set.singleton v') hmap
     Just s  -> M $ Map.insert k' (Set.insert v' s) hmap
 {-# INLINE insert #-}
+
+delete :: forall k v. (Insertable k, Insertable v)
+       => k -> MultiMap k v -> Maybe (HashSet v, MultiMap k v)
+delete k' M{..} =
+  case Map.lookup k' hmap of
+    Just vs -> Just $ (vs, M $ Map.delete k' hmap)
+    Nothing -> Nothing
+{-# INLINE delete #-}
 
 member :: (Insertable k) => k -> MultiMap k a -> Bool
 member k = Map.member k . hmap

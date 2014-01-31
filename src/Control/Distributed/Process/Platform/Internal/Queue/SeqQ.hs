@@ -17,6 +17,7 @@ module Control.Distributed.Process.Platform.Internal.Queue.SeqQ
   , singleton
   , enqueue
   , dequeue
+  , filter
   , peek
   )
   where
@@ -27,7 +28,8 @@ import Data.Sequence
   , (<|)
   , viewr
   )
-import qualified Data.Sequence as Seq (empty, singleton, null)
+import qualified Data.Sequence as Seq (empty, singleton, null, filter)
+import Prelude hiding (filter)
 
 newtype SeqQ a = SeqQ { q :: Seq a }
   deriving (Show)
@@ -53,6 +55,10 @@ enqueue s a = SeqQ $ a <| q s
 {-# INLINE dequeue #-}
 dequeue :: SeqQ a -> Maybe (a, SeqQ a)
 dequeue s = maybe Nothing (\(s' :> a) -> Just (a, SeqQ s')) $ getR s
+
+{-# INLINE filter #-}
+filter :: (a -> Bool) -> SeqQ a -> SeqQ a
+filter f s = SeqQ $ Seq.filter f (q s)
 
 {-# INLINE peek #-}
 peek :: SeqQ a -> Maybe a
