@@ -18,6 +18,11 @@
 -- Stability   :  experimental
 -- Portability :  non-portable (requires concurrency)
 --
+-- [Process Pool (Backend)]
+--
+-- This module implements a pool of worker processes, implemented with the
+-- 'BackingPool' API from "Control.Distributed.Process.Platform.Task.Pool'.
+--
 -----------------------------------------------------------------------------
 
 module Control.Distributed.Process.Platform.Task.Pool.WorkerPool where
@@ -73,14 +78,12 @@ import GHC.Generics
 type PoolSize        = Integer
 type InitialPoolSize = Integer
 
-newtype WorkerResource = Worker { impl :: Process () } deriving (Typeable)
-
 -- TODO: deduplicate these two definitions
 
-worker :: WorkerResource -> Resource (ProcessId, MonitorRef)
+worker :: Process () -> Resource (ProcessId, MonitorRef)
 worker w =
   Resource {
-      create   = spawnMonitorLocal (impl w)
+      create   = spawnMonitorLocal w
     , destroy  = \(p, _) -> exit p Shutdown >> awaitExit p
     , checkRef = (\m (_, r) -> do
          handleMessageIf m (\(ProcessMonitorNotification r' _ _) -> r == r')
@@ -88,14 +91,10 @@ worker w =
     , accept   = \t r -> sendChan (ticketChan t) r
     }
 
-newtype SpawnResource =
-  SpawnResource { spawnImpl :: Process (ProcessId, MonitorRef) }
-  deriving (Typeable)
-
-spawnWorker :: SpawnResource -> Resource (ProcessId, MonitorRef)
+spawnWorker :: Process (ProcessId, MonitorRef) -> Resource (ProcessId, MonitorRef)
 spawnWorker w =
   Resource {
-      create   = spawnImpl w
+      create   = w
     , destroy  = \(p, _) -> exit p Shutdown >> awaitExit p
     , checkRef = (\m (_, r) -> do
          handleMessageIf m (\(ProcessMonitorNotification r' _ _) -> r == r')
