@@ -51,6 +51,7 @@ import Control.Distributed.Process
   , monitor
   , unmonitor
   , finally
+  , unwrapMessage
   )
 import Control.Distributed.Process.Platform.Internal.IdentityPool
   ( IDPool
@@ -78,9 +79,11 @@ import GHC.Generics
 type PoolSize        = Integer
 type InitialPoolSize = Integer
 
+type RefType = (ProcessId, MonitorRef)
+
 -- TODO: deduplicate these two definitions
 
-worker :: Process () -> Resource (ProcessId, MonitorRef)
+worker :: Process () -> Resource RefType
 worker w =
   Resource {
       create   = spawnMonitorLocal w
@@ -91,7 +94,7 @@ worker w =
     , accept   = \t r -> sendChan (ticketChan t) r
     }
 
-spawnWorker :: Process (ProcessId, MonitorRef) -> Resource (ProcessId, MonitorRef)
+spawnWorker :: Process RefType -> Resource RefType
 spawnWorker w =
   Resource {
       create   = w
@@ -108,10 +111,10 @@ data WPState = WPState { sizeLimit :: PoolSize
                          -- TODO: keep track of things and report via getStats
                        }
 
-runWorkerPool :: Resource (ProcessId, MonitorRef)
+runWorkerPool :: Resource RefType
               -> PoolSize
               -> InitPolicy
-              -> RotationPolicy WPState (ProcessId, MonitorRef)
+              -> RotationPolicy WPState RefType
               -> ReclamationStrategy
               -> Process ()
 runWorkerPool rt sz ip rp rs = runPool rt poolDef ip rp rs (initState sz)
@@ -119,7 +122,7 @@ runWorkerPool rt sz ip rp rs = runPool rt poolDef ip rp rs (initState sz)
 initState :: PoolSize -> WPState
 initState sz = WPState sz
 
-poolDef :: PoolBackend WPState (ProcessId, MonitorRef)
+poolDef :: PoolBackend WPState RefType
 poolDef = PoolBackend { acquire  = apiAcquire
                       , release  = apiRelease
                       , dispose  = apiDispose
@@ -129,7 +132,7 @@ poolDef = PoolBackend { acquire  = apiAcquire
                       , getStats = apiGetStats
                       }
 
-apiAcquire  :: Pool WPState (ProcessId, MonitorRef) (Take (ProcessId, MonitorRef))
+apiAcquire  :: Pool WPState RefType (Take (ProcessId, MonitorRef))
 apiAcquire = do
   pol <- getInitPolicy
   case pol of
@@ -142,26 +145,26 @@ apiAcquire = do
   where
     tryAcquire = return . maybe Block Take =<< acquirePooledResource
 
-apiRelease :: (ProcessId, MonitorRef) -> Pool WPState (ProcessId, MonitorRef) ()
+apiRelease :: (ProcessId, MonitorRef) -> Pool WPState RefType ()
 apiRelease res = do
   releasePooledResource res
 
-apiDispose :: (ProcessId, MonitorRef) -> Pool WPState (ProcessId, MonitorRef) ()
+apiDispose :: (ProcessId, MonitorRef) -> Pool WPState RefType ()
 apiDispose r = do
   rType <- getResourceType
   res <- lift $ destroy rType r
   removePooledResource r
 
-apiSetup :: Pool WPState (ProcessId, MonitorRef) ()
+apiSetup :: Pool WPState RefType ()
 apiSetup = do
   pol <- getInitPolicy
   case pol of
     OnDemand -> return ()
     OnInit   -> startResources 0
   where
-    startResources :: PoolSize -> Pool WPState (ProcessId, MonitorRef) ()
+    startResources :: PoolSize -> Pool WPState RefType ()
     startResources cnt = do
-      st <- getState :: Pool WPState (ProcessId, MonitorRef) WPState
+      st <- getState :: Pool WPState RefType WPState
       if cnt <= (sizeLimit st)
          then do rType <- getResourceType
                  res <- lift $ create rType
@@ -169,14 +172,24 @@ apiSetup = do
                  startResources (cnt + 1)
          else return ()
 
-apiTeardown :: ExitReason -> Pool WPState (ProcessId, MonitorRef) ()
+apiTeardown :: ExitReason -> Pool WPState RefType ()
 apiTeardown = const $ foldResources (const apiDispose) ()
 
-apiInfoCall :: Message -> Pool WPState (ProcessId, MonitorRef) ()
+apiInfoCall :: Message -> Pool WPState RefType ()
 apiInfoCall msg = do
-  return ()
+  -- If this is a monitor signal and pertains to one of our resources,
+  -- we need to permanently remove it so its ref doesn't leak to
+  -- some unfortunate consumer (who'll expect the pid to be valid).
+  mSig <- lift $ checkMonitor msg
+  case mSig of
+    Nothing                                 -> return ()
+    Just (ProcessMonitorNotification r p _) -> removePooledResource (p, r)
 
-apiGetStats :: Pool WPState (ProcessId, MonitorRef) [PoolStatsInfo]
+  where
+    checkMonitor :: Message -> Process (Maybe ProcessMonitorNotification)
+    checkMonitor = unwrapMessage
+
+apiGetStats :: Pool WPState RefType [PoolStatsInfo]
 apiGetStats = do
   st <- getState
   return [PoolStatsCounter "sizeLimit" $ sizeLimit st]
