@@ -91,6 +91,7 @@ import Control.Distributed.Process.Platform.ManagedProcess
   , handleInfo
   , handleRaw
   , handleRpcChan
+  , handleCast
   , continue
   , defaultProcess
   , noReply_
@@ -182,7 +183,7 @@ data AcquireResource = AcquireResource ProcessId
 instance Binary AcquireResource where
 instance NFData AcquireResource where
 
-data ReleaseResource r = ReleaseResource r
+data ReleaseResource r = ReleaseResource r ProcessId
   deriving (Typeable, Generic)
 instance (Serializable r) => Binary (ReleaseResource r) where
 instance (NFData r) => NFData (ReleaseResource r) where
@@ -268,11 +269,18 @@ withState fn =
 lift :: forall s r a . Process a -> Pool s r a
 lift p = Pool $ ST.lift p
 
+type Busy = Bool
+
 foldResources :: forall s r a. (Referenced r)
               => (a -> r -> Pool s r a)
               -> a
               -> Pool s r a
-foldResources = undefined
+foldResources f a = do
+  st <- getPoolState
+  let rq = (st ^. resourceQueue)
+  a' <- foldlM f a  (_available rq)
+  b' <- foldlM f a' (_busy rq)
+  return b'
 
 resourceQueueLen :: forall s r . (Referenced r) => Pool s r (Int, Int)
 resourceQueueLen = do
@@ -364,6 +372,7 @@ data Ticket r = Ticket { ticketOwner :: ProcessId
 data State s r = State { _pool      :: PoolBackend s r
                        , _poolState :: PoolState s r
                        , _clients   :: MultiMap ProcessId r
+                       , _monitors  :: Map ProcessId MonitorRef
                        , _pending   :: SeqQ (Ticket r)
                        , _locked    :: Set r
                        , reclaim    :: ReclamationStrategy
@@ -380,6 +389,7 @@ defaultState :: forall r s. (Referenced r)
 defaultState rt pl ip rp rs ps = State { _pool      = pl
                                        , _poolState = initialPoolState rt ip rp ps
                                        , _clients   = MultiMap.empty
+                                       , _monitors  = Map.empty
                                        , _pending   = Queue.empty
                                        , reclaim    = rs
                                        }
@@ -411,7 +421,7 @@ releaseResource :: forall r. (Referenced r)
                 => ResourcePool r
                 -> r
                 -> Process ()
-releaseResource pool = cast pool . ReleaseResource
+releaseResource pool res = getSelfPid >>= cast pool . ReleaseResource res
 
 transfer :: forall r. (Referenced r)
          => ResourcePool r
@@ -475,9 +485,11 @@ processDefinition :: forall s r.
                      (Referenced r)
                   => ProcessDefinition (State s r)
 processDefinition =
-  defaultProcess { apiHandlers     = [ handleRpcChan handleAcquire ]
+  defaultProcess { apiHandlers     = [ handleRpcChan handleAcquire
+                                     , handleCast    handleRelease ]
                  , infoHandlers    = [ handleInfo handleMonitorSignal
-                                     , handleRaw  handlePotentialRef ]
+                                     , handleRaw  backendInfoCall
+                                     ]
                  , shutdownHandler = handleShutdown
                  , unhandledMessagePolicy = Drop
                  }
@@ -488,39 +500,84 @@ handleAcquire :: forall s r. (Referenced r)
               -> AcquireResource
               -> Process (ProcessAction (State s r))
 handleAcquire st@State{..} clientPort (AcquireResource clientPid) = do
-  void $ monitor clientPid
+  mRef <- monitor clientPid
   (take, pst) <- runPoolStateT (st ^. poolState) (acquire (st ^. pool))
-  let st' = (poolState ^= pst) st
+  let st' = ( (poolState ^= pst)
+            . (monitors ^: Map.insert clientPid mRef)
+            $ st )
   case take of
     Block  -> addPending clientPid clientPort st'
     Take r -> allocateResource r clientPid clientPort st'
+
+handleRelease :: forall s r. (Referenced r)
+              => State s r
+              -> ReleaseResource r
+              -> Process (ProcessAction (State s r))
+handleRelease st@State{..} (ReleaseResource res pid) = do
+  maybe (return ()) (void . unmonitor) $ Map.lookup pid (st ^. monitors)
+  let clients' = MultiMap.filter (/= res) (st ^. clients)
+  (_, pst) <- runPoolStateT (st ^. poolState) (release (st ^. pool) res)
+  dequeuePending $ ( (clients ^: MultiMap.filter (/= res))
+                   . (poolState ^= pst)
+                   $ st )
+
+dequeuePending :: forall s r . (Referenced r)
+               => State s r
+               -> Process (ProcessAction (State s r))
+dequeuePending st@State{..} = do
+  case Queue.dequeue pq of
+    Just (t, pending') -> bumpTicket t pending' st
+    Nothing            -> continue st
+  where
+    pq = st ^. pending
+
+bumpTicket :: forall s r. (Referenced r)
+           => Ticket r
+           -> SeqQ (Ticket r)
+           -> State s r
+           -> Process (ProcessAction (State s r))
+bumpTicket Ticket{..} pd st = do
+  -- Although we've just released a resource, there's no guarantee that
+  -- the pool backend will let us acquire another one, so we need to
+  -- cater for both cases here.
+  (take, pst) <- runPoolStateT (st ^. poolState) (acquire (st ^. pool))
+  case take of
+    Block  -> continue st
+    Take r -> allocateResource r ticketOwner ticketChan $ ( (poolState ^= pst)
+                                                          . (pending   ^= pd)
+                                                          $ st )
 
 handleMonitorSignal :: forall s r. (Referenced r)
                     => State s r
                     -> ProcessMonitorNotification
                     -> Process (ProcessAction (State s r))
 handleMonitorSignal st mSig@(ProcessMonitorNotification _ pid _) = do
-  let mp = MultiMap.delete pid (st ^. clients)
+  let st' = (monitors ^: Map.delete pid) st
+  let mp = MultiMap.delete pid (st' ^. clients)
   case mp of
     Nothing        -> handoffToBackend mSig =<< clearTickets pid st
-    Just (rs, mp') -> applyReclamationStrategy pid rs ((clients ^= mp') st)
+    Just (rs, mp') -> applyReclamationStrategy pid rs $ (clients ^= mp') st'
 
-handoffToBackend :: forall s r m. (Referenced r, Serializable m)
-                 => m
-                 -> State s r
-                 -> Process (ProcessAction (State s r))
-handoffToBackend msg st = backendInfoCall (unsafeWrapMessage msg) st
+handleShutdown :: forall s r . State s r -> ExitReason -> Process ()
+handleShutdown st@State{..} reason =
+  void $ runPoolStateT (st ^. poolState) (teardown (st ^. pool) $ reason)
 
 backendInfoCall :: forall s r . (Referenced r)
-                => Message
-                -> State s r
+                => State s r
+                -> Message
                 -> Process (ProcessAction (State s r))
-backendInfoCall msg st = do
+backendInfoCall st msg = do
   ((), pst) <- runPoolStateT ps $ infoCall pl msg
   continue $ (poolState ^= pst) st
   where
     ps = st ^. poolState
     pl = st ^. pool
+
+handoffToBackend :: forall s r m. (Referenced r, Serializable m)
+                 => m
+                 -> State s r
+                 -> Process (ProcessAction (State s r))
+handoffToBackend msg st = backendInfoCall st (unsafeWrapMessage msg)
 
 clearTickets :: forall s r. (Referenced r)
              => ProcessId
@@ -542,12 +599,11 @@ applyReclamationStrategy pid rs st@State{..} =
   in act st rs >>= clearTickets pid >>= handoffToBackend pid
   where
     doRelease st' rs' = do
-      ((), pst) <- runPoolStateT poolState' (forM_ (HashSet.toList rs') release')
+      (_, pst) <- runPoolStateT poolState' (forM_ (HashSet.toList rs') release')
       return $ ( (poolState ^= pst) st' )
 
     doDestroy st' rs' = do
-      let rs'' = HashSet.toList rs'
-      ((), pst) <- runPoolStateT poolState' (forM_ rs'' dispose')
+      (_, pst) <- runPoolStateT poolState' (forM_ (HashSet.toList rs') dispose')
       return $ ( (poolState ^= pst) st' )
 
     doPermLock st' rs' = do
@@ -561,12 +617,6 @@ applyReclamationStrategy pid rs st@State{..} =
     dispose'      = dispose (st ^. pool)
     release'      = release (st ^. pool)
     resourceType' = resourceType (st ^. poolState)
-
-handlePotentialRef :: forall s r. (Referenced r)
-                   => State s r
-                   -> Message
-                   -> Process (ProcessAction (State s r))
-handlePotentialRef = undefined
 
 addPending :: forall s r . (Referenced r)
            => ProcessId
@@ -587,10 +637,6 @@ allocateResource ref clientPid clientPort st = do
   unsafeSendChan clientPort ref
   continue $ ( (clients ^: MultiMap.insert clientPid ref) st )
 
-handleShutdown :: forall s r . State s r -> ExitReason -> Process ()
-handleShutdown st@State{..} reason =
-  void $ runPoolStateT (st ^. poolState) (teardown (st ^. pool) $ reason)
-
 --------------------------------------------------------------------------------
 -- Accessors, State/Stats Management & Utilities                              --
 --------------------------------------------------------------------------------
@@ -603,6 +649,9 @@ poolState = accessor _poolState (\ps' st -> st { _poolState = ps' })
 
 clients :: forall s r. Accessor (State s r) (MultiMap ProcessId r)
 clients = accessor _clients (\cs' st -> st { _clients = cs' })
+
+monitors :: forall s r. Accessor (State s r) (Map ProcessId MonitorRef)
+monitors = accessor _monitors (\ms' st -> st { _monitors = ms' })
 
 pending :: forall s r. Accessor (State s r) (SeqQ (Ticket r))
 pending = accessor _pending (\tks' st -> st { _pending = tks' })

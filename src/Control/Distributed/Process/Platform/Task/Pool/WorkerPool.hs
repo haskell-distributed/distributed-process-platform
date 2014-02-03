@@ -61,6 +61,7 @@ import Control.Distributed.Process.Platform.Internal.Types
   , Shutdown(..)
   , Linkable(..)
   , NFSerializable(..)
+  , ExitReason(..)
   )
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Platform.Task.Pool
@@ -119,17 +120,17 @@ runWorkerPool rt sz ip rp rs = runPool rt poolDef ip rp rs (initState sz)
 initState :: PoolSize -> WPState
 initState sz = WPState sz
 
-poolDef :: forall r. (Referenced r) => PoolBackend WPState r
+poolDef :: PoolBackend WPState (ProcessId, MonitorRef)
 poolDef = PoolBackend { acquire  = apiAcquire
                       , release  = apiRelease
                       , dispose  = apiDispose
                       , setup    = apiSetup
-                      , teardown = const $ return () -- TODO: FIXME!
+                      , teardown = apiTeardown
                       , infoCall = apiInfoCall
                       , getStats = apiGetStats
                       }
 
-apiAcquire  :: forall r. (Referenced r) => Pool WPState r (Take r)
+apiAcquire  :: Pool WPState (ProcessId, MonitorRef) (Take (ProcessId, MonitorRef))
 apiAcquire = do
   pol <- getInitPolicy
   case pol of
@@ -142,25 +143,26 @@ apiAcquire = do
   where
     tryAcquire = return . maybe Block Take =<< acquirePooledResource
 
-apiRelease :: forall r. (Referenced r) => r -> Pool WPState r ()
-apiRelease = undefined
+apiRelease :: (ProcessId, MonitorRef) -> Pool WPState (ProcessId, MonitorRef) ()
+apiRelease res = do
+  releasePooledResource res
 
-apiDispose :: forall r. (Referenced r) => r -> Pool WPState r ()
+apiDispose :: (ProcessId, MonitorRef) -> Pool WPState (ProcessId, MonitorRef) ()
 apiDispose r = do
   rType <- getResourceType
   res <- lift $ destroy rType r
   removePooledResource r
 
-apiSetup :: forall r. (Referenced r) => Pool WPState r ()
+apiSetup :: Pool WPState (ProcessId, MonitorRef) ()
 apiSetup = do
   pol <- getInitPolicy
   case pol of
     OnDemand -> return ()
     OnInit   -> startResources 0
   where
-    startResources :: PoolSize -> Pool WPState r ()
+    startResources :: PoolSize -> Pool WPState (ProcessId, MonitorRef) ()
     startResources cnt = do
-      st <- getState :: Pool WPState r WPState
+      st <- getState :: Pool WPState (ProcessId, MonitorRef) WPState
       if cnt <= (sizeLimit st)
          then do rType <- getResourceType
                  res <- lift $ create rType
@@ -168,10 +170,14 @@ apiSetup = do
                  startResources (cnt + 1)
          else return ()
 
-apiInfoCall :: forall r. (Referenced r) => Message -> Pool WPState r ()
-apiInfoCall = const $ return ()
+apiTeardown :: ExitReason -> Pool WPState (ProcessId, MonitorRef) ()
+apiTeardown = const $ foldResources (const apiDispose) ()
 
-apiGetStats :: forall r. (Referenced r) => Pool WPState r [PoolStatsInfo]
+apiInfoCall :: Message -> Pool WPState (ProcessId, MonitorRef) ()
+apiInfoCall msg = do
+  return ()
+
+apiGetStats :: Pool WPState (ProcessId, MonitorRef) [PoolStatsInfo]
 apiGetStats = do
   st <- getState
   return [PoolStatsCounter "sizeLimit" $ sizeLimit st]
