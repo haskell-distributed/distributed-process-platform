@@ -298,6 +298,7 @@ module Control.Distributed.Process.Platform.ManagedProcess
     -- * Defining server processes
   , ProcessDefinition(..)
   , PrioritisedProcessDefinition(..)
+  , RecvTimeoutPolicy(..)
   , Priority(..)
   , DispatchPriority()
   , Dispatcher()
@@ -473,10 +474,13 @@ defaultProcess = ProcessDefinition {
 prioritised :: ProcessDefinition s
             -> [DispatchPriority s]
             -> PrioritisedProcessDefinition s
-prioritised def ps = PrioritisedProcessDefinition def ps
+prioritised def ps = PrioritisedProcessDefinition def ps defaultRecvTimeoutPolicy
+
+defaultRecvTimeoutPolicy :: RecvTimeoutPolicy
+defaultRecvTimeoutPolicy = RecvCounter 10000
 
 defaultProcessWithPriorities :: [DispatchPriority s] -> PrioritisedProcessDefinition s
-defaultProcessWithPriorities = PrioritisedProcessDefinition defaultProcess
+defaultProcessWithPriorities dps = prioritised defaultProcess dps
 
 -- | A basic, stateless process definition, where the unhandled message policy
 -- is set to 'Terminate', the default timeout handlers does nothing (i.e., the

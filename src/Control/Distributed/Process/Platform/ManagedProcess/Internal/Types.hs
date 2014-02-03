@@ -29,6 +29,7 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
   , Priority(..)
   , DispatchPriority(..)
   , PrioritisedProcessDefinition(..)
+  , RecvTimeoutPolicy(..)
   , ControlChannel(..)
   , ControlPort(..)
   , channelControlPort
@@ -302,13 +303,28 @@ data DispatchPriority s =
       prioritise :: s -> P.Message -> Process (Maybe (Int, P.Message))
     }
 
+-- | For a 'PrioritisedProcessDefinition', this policy determines for how long
+-- the /receive loop/ should continue draining the process' mailbox before
+-- processing its received mail (in priority order).
+--
+-- If a prioritised /managed process/ is receiving a lot of messages (into its
+-- /real/ mailbox), the server might never get around to actually processing its
+-- inputs. This (mandatory) policy provides a guarantee that eventually (i.e.,
+-- after a specified number of received messages or time interval), the server
+-- will stop removing messages from its mailbox and process those it has already
+-- received.
+--
+data RecvTimeoutPolicy = RecvCounter Int | RecvTimer TimeInterval
+  deriving (Typeable)
+
 -- | A @ProcessDefinition@ decorated with @DispatchPriority@ for certain
 -- input domains.
 data PrioritisedProcessDefinition s =
   PrioritisedProcessDefinition
   {
-    processDef :: ProcessDefinition s
-  , priorities :: [DispatchPriority s]
+    processDef  :: ProcessDefinition s
+  , priorities  :: [DispatchPriority s]
+  , recvTimeout :: RecvTimeoutPolicy
   }
 
 -- | Policy for handling unexpected messages, i.e., messages which are not

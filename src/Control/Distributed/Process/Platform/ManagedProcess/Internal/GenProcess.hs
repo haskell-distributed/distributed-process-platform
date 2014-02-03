@@ -95,7 +95,7 @@ recvQueue p s t q =
         case timedOut of
           Stop s' r -> return $ (ProcessStopping s' r, (fst tSpec), queue)
           Go t' s'  -> do
-            -- checkTimer could've run `timeoutHandler', which changes s
+            -- checkTimer could've run our timeoutHandler, which changes "s"
             case (dequeue queue) of
               Nothing -> do
                 -- if the internal queue is empty, we fall back to reading the
@@ -147,7 +147,9 @@ recvQueue p s t q =
           Nothing -> h pState delay >>= \act -> return $ (act, delay, queue)
           Just m  -> do
             queue' <- enqueueMessage pState ps' m queue
-            -- QUESTION: should this drop back to `drainMessageQueue' now???
+            -- Returning @ProcessContinue@ simply causes the main loop to go
+            -- into 'recvQueueAux', which ends up in 'drainMessageQueue'.
+            -- In other words, we continue draining the /real/ mailbox.
             return $ (ProcessContinue pState, delay, queue')
 
 drainMessageQueue :: s -> [DispatchPriority s] -> Queue -> Process Queue
@@ -198,7 +200,7 @@ recvLoop pDef pState recvDelay =
         (ProcessTimeout t' s')   -> recvLoop pDef s' (Delay t')
         (ProcessHibernate d' s') -> block d' >> recvLoop pDef s' recvDelay
         (ProcessStop r) -> handleStop pState r >> return (r :: ExitReason)
-        (ProcessStopping s' r) -> handleStop s' r >> return (r :: ExitReason)
+        (ProcessStopping s' r)   -> handleStop s' r >> return (r :: ExitReason)
   where
     matchAux :: UnhandledMessagePolicy
              -> s
@@ -271,7 +273,6 @@ checkTimer pState spec handler = let delay = fst spec in do
         ProcessTimeout   t' s' -> return $ Go (Delay t') s'
         ProcessStop      r     -> return $ Stop pState r
         ProcessStopping  s' r  -> return $ Stop s' r
-        -- TODO handle ProcessStopping......
         ProcessHibernate d' s' -> block d' >> go spec s'
         ProcessContinue  s'    -> go spec s'
   where
