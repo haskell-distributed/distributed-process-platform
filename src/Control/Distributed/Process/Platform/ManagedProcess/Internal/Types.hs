@@ -31,6 +31,7 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
   , PrioritisedProcessDefinition(..)
   , RecvTimeoutPolicy(..)
   , ControlChannel(..)
+  , newControlChan
   , ControlPort(..)
   , channelControlPort
   , Dispatcher(..)
@@ -207,6 +208,10 @@ newtype ControlChannel m =
   ControlChannel {
       unControl :: (SendPort (Message m ()), ReceivePort (Message m ()))
     }
+
+-- | Creates a new 'ControlChannel'.
+newControlChan :: (Serializable m) => Process (ControlChannel m)
+newControlChan = newChan >>= return . ControlChannel
 
 -- | The writable end of a 'ControlChannel'.
 --

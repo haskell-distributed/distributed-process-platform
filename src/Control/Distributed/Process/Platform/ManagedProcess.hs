@@ -240,10 +240,10 @@
 -- the base @receiveWait@ and @receiveTimeout@ primitives from
 -- distribute-process provides.
 --
--- In order to utilise a /control channel/, it is necessary to start the process
--- using 'chanServe'. Instead of passing in an initialised 'ProcessDefinition',
--- this requires an expression that takes an opaque 'ControlChannel' and yields
--- the 'ProcessDefinition' in the 'Process' monad. Providing the opaque reference
+-- In order to utilise a /control channel/, it is necessary to evaluate the
+-- server loop using 'chanServe'. Instead of passing an initialised definition,
+-- this requires an expression taking an opaque 'ControlChannel' and yielding
+-- our 'ProcessDefinition' in the 'Process' monad. Providing the opaque reference
 -- in this fashion is necessary, since the type of messages the control channel
 -- carries does not correlate directly to the inter-process traffic it uses
 -- internally. The API for creating handlers that respond to /control channel/
@@ -285,7 +285,7 @@
 -----------------------------------------------------------------------------
 
 module Control.Distributed.Process.Platform.ManagedProcess
-  ( -- * Starting server processes
+  ( -- * Starting/Running server processes
     InitResult(..)
   , InitHandler
   , serve
@@ -342,9 +342,10 @@ module Control.Distributed.Process.Platform.ManagedProcess
   , handleRpcChan_
   , handleRpcChanIf_
     -- * Control channels
+  , newControlChan
+  , channelControlPort
   , handleControlChan
   , handleControlChan_
-  , channelControlPort
     -- * Prioritised mailboxes
   , module Control.Distributed.Process.Platform.ManagedProcess.Server.Priority
     -- * Constructing handler results
@@ -382,27 +383,32 @@ import Prelude hiding (init)
 
 -- TODO: automatic registration
 
--- | Starts a managed process configured with the supplied process definition,
--- using an init handler and its initial arguments.
+-- | Starts the /message handling loop/ for a managed process configured with
+-- the supplied process definition, after calling the init handler with its
+-- initial arguments. Note that this function does not return until the server
+-- exits.
 serve :: a
       -> InitHandler a s
       -> ProcessDefinition s
       -> Process ()
 serve argv init def = runProcess (recvLoop def) argv init
 
--- | Starts a prioritised managed process configured with the supplied process
--- definition, using an init handler and its initial arguments.
+-- | Starts the /message handling loop/ for a prioritised managed process,
+-- configured with the supplied process definition, after calling the init
+-- handler with its initial arguments. Note that this function does not return
+-- until the server exits.
 pserve :: a
        -> InitHandler a s
        -> PrioritisedProcessDefinition s
        -> Process ()
 pserve argv init def = runProcess (precvLoop def) argv init
 
--- | Starts a managed process, configured with a typed /control channel/. The
--- caller supplied expression is evaluated with an opaque reference to the
--- channel, which must be passed when calling @handleControlChan@. The meaning
--- and behaviour of the init handler and initial arguments are the same as
--- those given to 'serve'.
+-- | Starts the /message handling loop/ for a managed process, configured with
+-- a typed /control channel/. The caller supplied expression is evaluated with
+-- an opaque reference to the channel, which must be passed when calling
+-- @handleControlChan@. The meaning and behaviour of the init handler and
+-- initial arguments are the same as those given to 'serve'. Note that this
+-- function does not return until the server exits.
 --
 chanServe :: (Serializable b)
           => a
@@ -435,13 +441,13 @@ busServe argv init m mkDef = do
   pDef <- mkDef $ ControlPlane m
 -}
 
--- | Wraps any /process loop/ and enforces that it adheres to the
--- managed process' start/stop semantics, i.e., evaluating the
+-- | Wraps any /process loop/ and ensures that it adheres to the
+-- managed process start/stop semantics, i.e., evaluating the
 -- @InitHandler@ with an initial state and delay will either
 -- @die@ due to @InitStop@, exit silently (due to @InitIgnore@)
 -- or evaluate the process' @loop@. The supplied @loop@ must evaluate
--- to @ExitNormal@, otherwise the evaluating processing will will
--- @die@ with the @ExitReason@.
+-- to @ExitNormal@, otherwise the calling processing will @die@ with
+-- whatever @ExitReason@ is given.
 --
 runProcess :: (s -> Delay -> Process ExitReason)
            -> a
@@ -458,6 +464,9 @@ runProcess loop args init = do
     checkExitType ExitNormal = return ()
     checkExitType other      = die other
 
+-- | A default 'ProcessDefinition', with no api, info or exit handler.
+-- The default 'timeoutHandler' simply continues, the 'shutdownHandler'
+-- is a no-op and the 'unhandledMessagePolicy' is @Terminate@.
 defaultProcess :: ProcessDefinition s
 defaultProcess = ProcessDefinition {
     apiHandlers      = []
@@ -476,19 +485,22 @@ prioritised :: ProcessDefinition s
             -> PrioritisedProcessDefinition s
 prioritised def ps = PrioritisedProcessDefinition def ps defaultRecvTimeoutPolicy
 
+-- | Sets the default 'recvTimeoutPolicy', which gives up after 10k reads.
 defaultRecvTimeoutPolicy :: RecvTimeoutPolicy
 defaultRecvTimeoutPolicy = RecvCounter 10000
 
+-- | Creates a default 'PrioritisedProcessDefinition' from a list of
+-- 'DispatchPriority'. See 'defaultProcess' for the underlying definition.
 defaultProcessWithPriorities :: [DispatchPriority s] -> PrioritisedProcessDefinition s
 defaultProcessWithPriorities dps = prioritised defaultProcess dps
 
--- | A basic, stateless process definition, where the unhandled message policy
--- is set to 'Terminate', the default timeout handlers does nothing (i.e., the
--- same as calling @continue ()@ and the terminate handler is a no-op.
+-- | A basic, stateless 'ProcessDefinition'. See 'defaultProcess' for the
+-- default field values.
 statelessProcess :: ProcessDefinition ()
 statelessProcess = defaultProcess :: ProcessDefinition ()
 
--- | A basic, state /unaware/ 'InitHandler' that can be used with
--- 'statelessProcess'.
+-- | A default, state /unaware/ 'InitHandler' that can be used with
+-- 'statelessProcess'. This simply returns @InitOk@ with the empty
+-- state (i.e., unit) and the given 'Delay'.
 statelessInit :: Delay -> InitHandler () ()
 statelessInit d () = return $ InitOk () d
