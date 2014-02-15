@@ -253,7 +253,7 @@
 -- /Control channel/ traffic will only be prioritised over other traffic if the
 -- handlers using it are present before others (e.g., @handleInfo, handleCast@,
 -- etc) in the process definition. It is not possible to combine prioritised
--- processes with /control channels/. Attempting to do so will get passed the
+-- processes with /control channels/. Attempting to do so will satisfy the
 -- compiler, but crash with a runtime error once you attempt to evaluate the
 -- prioritised server loop (i.e., 'pserve').
 --
@@ -459,28 +459,6 @@ chanServe argv init mkDef = do
   pDef <- mkDef . ControlChannel =<< newChan
   runProcess (recvLoop pDef) argv init
 
--- TODO: Make this work!!!!!!!!!!
-{-
-stmChanServe :: a
-             -> InitHandler a s
-             -> STM b
-             -> (StmControlChannel b -> Process (ProcessDefintion s))
-             -> Process ()
-stmChanServe = undefined
--}
-
--- TODO: Make this work???
-{-
-busServe :: (Serializable b, MessageMatcher m) =>
-         => a
-         -> InitHandler a s
-         -> m
-         -> (ControlPlane b -> Process (ProcessDefintion s))
-         -> Process ()
-busServe argv init m mkDef = do
-  pDef <- mkDef $ ControlPlane m
--}
-
 -- | Wraps any /process loop/ and ensures that it adheres to the
 -- managed process start/stop semantics, i.e., evaluating the
 -- @InitHandler@ with an initial state and delay will either
@@ -544,3 +522,4 @@ statelessProcess = defaultProcess :: ProcessDefinition ()
 -- state (i.e., unit) and the given 'Delay'.
 statelessInit :: Delay -> InitHandler () ()
 statelessInit d () = return $ InitOk () d
+
