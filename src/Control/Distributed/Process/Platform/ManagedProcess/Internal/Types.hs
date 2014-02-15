@@ -29,7 +29,9 @@ module Control.Distributed.Process.Platform.ManagedProcess.Internal.Types
   , Priority(..)
   , DispatchPriority(..)
   , PrioritisedProcessDefinition(..)
+  , RecvTimeoutPolicy(..)
   , ControlChannel(..)
+  , newControlChan
   , ControlPort(..)
   , channelControlPort
   , Dispatcher(..)
@@ -126,7 +128,7 @@ data InitResult s =
 --
 data ProcessAction s =
     ProcessContinue  s              -- ^ continue with (possibly new) state
-  | ProcessTimeout   TimeInterval s -- ^ timeout if no messages are received
+  | ProcessTimeout   Delay        s -- ^ timeout if no messages are received
   | ProcessHibernate TimeInterval s -- ^ hibernate for /delay/
   | ProcessStop      ExitReason     -- ^ stop the process, giving @ExitReason@
   | ProcessStopping  s ExitReason   -- ^ stop the process with @ExitReason@, with updated state
@@ -206,6 +208,10 @@ newtype ControlChannel m =
   ControlChannel {
       unControl :: (SendPort (Message m ()), ReceivePort (Message m ()))
     }
+
+-- | Creates a new 'ControlChannel'.
+newControlChan :: (Serializable m) => Process (ControlChannel m)
+newControlChan = newChan >>= return . ControlChannel
 
 -- | The writable end of a 'ControlChannel'.
 --
@@ -302,13 +308,28 @@ data DispatchPriority s =
       prioritise :: s -> P.Message -> Process (Maybe (Int, P.Message))
     }
 
+-- | For a 'PrioritisedProcessDefinition', this policy determines for how long
+-- the /receive loop/ should continue draining the process' mailbox before
+-- processing its received mail (in priority order).
+--
+-- If a prioritised /managed process/ is receiving a lot of messages (into its
+-- /real/ mailbox), the server might never get around to actually processing its
+-- inputs. This (mandatory) policy provides a guarantee that eventually (i.e.,
+-- after a specified number of received messages or time interval), the server
+-- will stop removing messages from its mailbox and process those it has already
+-- received.
+--
+data RecvTimeoutPolicy = RecvCounter Int | RecvTimer TimeInterval
+  deriving (Typeable)
+
 -- | A @ProcessDefinition@ decorated with @DispatchPriority@ for certain
 -- input domains.
 data PrioritisedProcessDefinition s =
   PrioritisedProcessDefinition
   {
-    processDef :: ProcessDefinition s
-  , priorities :: [DispatchPriority s]
+    processDef  :: ProcessDefinition s
+  , priorities  :: [DispatchPriority s]
+  , recvTimeout :: RecvTimeoutPolicy
   }
 
 -- | Policy for handling unexpected messages, i.e., messages which are not

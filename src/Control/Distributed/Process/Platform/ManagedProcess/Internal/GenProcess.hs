@@ -1,6 +1,7 @@
 {-# LANGUAGE ExistentialQuantification  #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE ViewPatterns               #-}
+{-# LANGUAGE PatternGuards              #-}
 
 -- | This is the @Process@ implementation of a /managed process/
 module Control.Distributed.Process.Platform.ManagedProcess.Internal.GenProcess
@@ -66,7 +67,7 @@ recvQueue p s t q =
     (ac, d, q') <- processNext pDef ps s t q
     case ac of
       (ProcessContinue s')     -> recvQueueAux p ps s' d q'
-      (ProcessTimeout t' s')   -> recvQueueAux p ps s' (Delay t') q'
+      (ProcessTimeout t' s')   -> recvQueueAux p ps s' t' q'
       (ProcessHibernate d' s') -> block d' >> recvQueueAux p ps s' d q'
       (ProcessStop r)          -> handleStop s r >> return (r :: ExitReason)
       (ProcessStopping s' r)   -> handleStop s' r >> return (r :: ExitReason)
@@ -95,7 +96,7 @@ recvQueue p s t q =
         case timedOut of
           Stop s' r -> return $ (ProcessStopping s' r, (fst tSpec), queue)
           Go t' s'  -> do
-            -- checkTimer could've run `timeoutHandler', which changes s
+            -- checkTimer could've run our timeoutHandler, which changes "s"
             case (dequeue queue) of
               Nothing -> do
                 -- if the internal queue is empty, we fall back to reading the
@@ -141,13 +142,16 @@ recvQueue p s t q =
       let matches = [ matchMessage return ]
           recv    = case delay of
                       Infinity -> receiveWait matches >>= return . Just
+                      NoDelay  -> receiveTimeout 0 matches
                       Delay i  -> receiveTimeout (asTimeout i) matches in do
         r <- recv
         case r of
           Nothing -> h pState delay >>= \act -> return $ (act, delay, queue)
           Just m  -> do
             queue' <- enqueueMessage pState ps' m queue
-            -- QUESTION: should this drop back to `drainMessageQueue' now???
+            -- Returning @ProcessContinue@ simply causes the main loop to go
+            -- into 'recvQueueAux', which ends up in 'drainMessageQueue'.
+            -- In other words, we continue draining the /real/ mailbox.
             return $ (ProcessContinue pState, delay, queue')
 
 drainMessageQueue :: s -> [DispatchPriority s] -> Queue -> Process Queue
@@ -195,10 +199,10 @@ recvLoop pDef pState recvDelay =
                       (map (\d' -> (dispatchExit d') pState) ex')
     case ac of
         (ProcessContinue s')     -> recvLoop pDef s' recvDelay
-        (ProcessTimeout t' s')   -> recvLoop pDef s' (Delay t')
+        (ProcessTimeout t' s')   -> recvLoop pDef s' t'
         (ProcessHibernate d' s') -> block d' >> recvLoop pDef s' recvDelay
         (ProcessStop r) -> handleStop pState r >> return (r :: ExitReason)
-        (ProcessStopping s' r) -> handleStop s' r >> return (r :: ExitReason)
+        (ProcessStopping s' r)   -> handleStop s' r >> return (r :: ExitReason)
   where
     matchAux :: UnhandledMessagePolicy
              -> s
@@ -244,6 +248,7 @@ recvLoop pDef pState recvDelay =
     recv matches d' =
       case d' of
         Infinity -> receiveWait matches >>= return . Just
+        NoDelay  -> receiveTimeout 0 matches
         Delay t' -> receiveTimeout (asTimeout t') matches
 
 --------------------------------------------------------------------------------
@@ -251,11 +256,11 @@ recvLoop pDef pState recvDelay =
 --------------------------------------------------------------------------------
 
 startTimer :: Delay -> Process TimeoutSpec
-startTimer Infinity    = return (Infinity, Nothing)
-startTimer d@(Delay t) = do
-  sig <- liftIO $ newEmptyTMVarIO
-  tref <- runAfter t $ liftIO $ atomically $ putTMVar sig ()
-  return (d, Just (tref, (readTMVar sig)))
+startTimer d
+  | Delay t <- d = do sig <- liftIO $ newEmptyTMVarIO
+                      tref <- runAfter t $ liftIO $ atomically $ putTMVar sig ()
+                      return (d, Just (tref, (readTMVar sig)))
+  | otherwise    = return (d, Nothing)
 
 checkTimer :: s
            -> TimeoutSpec
@@ -268,10 +273,9 @@ checkTimer pState spec handler = let delay = fst spec in do
     True  -> do
       act <- handler pState delay
       case act of
-        ProcessTimeout   t' s' -> return $ Go (Delay t') s'
+        ProcessTimeout   t' s' -> return $ Go t' s'
         ProcessStop      r     -> return $ Stop pState r
         ProcessStopping  s' r  -> return $ Stop s' r
-        -- TODO handle ProcessStopping......
         ProcessHibernate d' s' -> block d' >> go spec s'
         ProcessContinue  s'    -> go spec s'
   where
