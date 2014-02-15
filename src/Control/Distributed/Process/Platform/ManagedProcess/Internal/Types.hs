@@ -128,7 +128,7 @@ data InitResult s =
 --
 data ProcessAction s =
     ProcessContinue  s              -- ^ continue with (possibly new) state
-  | ProcessTimeout   TimeInterval s -- ^ timeout if no messages are received
+  | ProcessTimeout   Delay        s -- ^ timeout if no messages are received
   | ProcessHibernate TimeInterval s -- ^ hibernate for /delay/
   | ProcessStop      ExitReason     -- ^ stop the process, giving @ExitReason@
   | ProcessStopping  s ExitReason   -- ^ stop the process with @ExitReason@, with updated state

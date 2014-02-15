@@ -131,7 +131,7 @@
 --       apiHandlers = [
 --         handleCall_   (\\(n :: Int) -> return (n * 2))
 --       , handleCastIf_ (\\(c :: String, _ :: Delay) -> c == \"timeout\")
---                       (\\(\"timeout\", Delay d) -> timeoutAfter_ d)
+--                       (\\(\"timeout\", (d :: Delay)) -> timeoutAfter_ d)
 --       ]
 --     , timeoutHandler = \\_ _ -> stop $ ExitOther \"timeout\"
 --   }
@@ -240,37 +240,75 @@
 -- the base @receiveWait@ and @receiveTimeout@ primitives from
 -- distribute-process provides.
 --
--- In order to utilise a /control channel/, it is necessary to evaluate the
--- server loop using 'chanServe'. Instead of passing an initialised definition,
--- this requires an expression taking an opaque 'ControlChannel' and yielding
--- our 'ProcessDefinition' in the 'Process' monad. Providing the opaque reference
--- in this fashion is necessary, since the type of messages the control channel
--- carries does not correlate directly to the inter-process traffic it uses
--- internally. The API for creating handlers that respond to /control channel/
--- inputs (i.e., 'handleControlChan' and 'handleControlChan_') also requires the
--- reference to be passed with the handler expression.
+-- In order to utilise a /control channel/ in a server, it must be passed to the
+-- corresponding 'handleControlChan' function (or its stateless variant). The
+-- control channel is created by evaluating 'newControlChan', in the same way
+-- that we create regular typed channels.
 --
--- In order for clients to communicate with a server via its control channel,
--- they must pass a handle to a 'ControlPort', which can be obtained by
--- evaluating 'channelControlPort' on the 'ControlChannel' passed to the
--- expression which yields the 'ProcessDefinition'. It is for this reason that
--- we evaluate the 'ProcessDefinition' construction in the process monad, since
--- using an @MVar@ or @STM@ construct is the easiest way to have the channel's
--- control port /escape/ to the outside world. A 'ControlPort' is @Serializable@,
--- so they can alternatively be sent to other processes.
+-- In order for clients to communicate with a server via its control channel
+-- however, they must pass a handle to a 'ControlPort', which can be obtained by
+-- evaluating 'channelControlPort' on the 'ControlChannel'. A 'ControlPort' is
+-- @Serializable@, so they can alternatively be sent to other processes.
 --
 -- /Control channel/ traffic will only be prioritised over other traffic if the
 -- handlers using it are present before others (e.g., @handleInfo, handleCast@,
 -- etc) in the process definition. It is not possible to combine prioritised
--- processes with /control channels/.
+-- processes with /control channels/. Attempting to do so will get passed the
+-- compiler, but crash with a runtime error once you attempt to evaluate the
+-- prioritised server loop (i.e., 'pserve').
+--
+-- Since the primary purpose of control channels is to simplify and optimise
+-- client-server communication over a single channel, this module provides an
+-- alternate server loop in the form of 'chanServe'. Instead of passing an
+-- initialised 'ProcessDefinition', this API takes an expression from a
+-- 'ControlChannel' to 'ProcessDefinition', operating in the 'Process' monad.
+-- Providing the opaque reference in this fashion is useful, since the type of
+-- messages the control channel carries will not correlate directly to the
+-- inter-process traffic we use internally.
+--
+-- Although control channels are intended for use as a single control plane
+-- (via 'chanServe'), it /is/ possible to use them as a more strictly typed
+-- communications backbone, since they do enforce absolute type safety in client
+-- code, being bound to a particular type on creation. For rpc (i.e., 'call')
+-- interaction however, it is not possible to have the server reply to a control
+-- channel, since they're a /one way pipe/. It is possible to alleviate this
+-- situation by passing a request type than contains a typed channel bound to
+-- the expected reply type, enabling client and server to match on both the input
+-- and output types as specifically as possible. Note that this still does not
+-- guarantee an agreement on types between all parties at runtime however.
+--
+-- An example of how to do this follows:
+--
+-- > data Request = Request String (SendPort String)
+-- >   deriving (Typeable, Generic)
+-- > instance Binary Request where
+-- >
+-- > -- note that our initial caller needs an mvar to obtain the control port...
+-- > echoServer :: MVar (ControlPort Request) -> Process ()
+-- > echoServer mv = do
+-- >   cc <- newControlChan :: Process (ControlChannel Request)
+-- >   liftIO $ putMVar mv $ channelControlPort cc
+-- >   let s = statelessProcess {
+-- >       apiHandlers = [
+-- >            handleControlChan_ cc (\(Request m sp) -> sendChan sp m >> continue_)
+-- >          ]
+-- >     }
+-- >   serve () (statelessInit Infinity) s
+-- >
+-- > echoClient :: String -> ControlPort Request -> Process String
+-- > echoClient str cp = do
+-- >   (sp, rp) <- newChan
+-- >   sendControlMessage cp $ Request str sp
+-- >   receiveChan rp
 --
 -- [Performance Considerations]
 --
--- The server implementations are fairly optimised, but there /is/ a definite
+-- The various server loops are fairly optimised, but there /is/ a definite
 -- cost associated with scanning the mailbox to match on protocol messages,
 -- plus additional costs in space and time due to mapping over all available
 -- /info handlers/ for non-protocol (i.e., neither /call/ nor /cast/) messages.
--- These are exacerbated when using prioritisation.
+-- These are exacerbated significantly when using prioritisation, whilst using
+-- a single control channel is very fast and carries little overhead.
 --
 -- From the client perspective, it's important to remember that the /call/
 -- protocol will wait for a reply in most cases, triggering a full O(n) scan of
@@ -278,9 +316,11 @@
 -- regularly made, this may have a significant impact on the caller. The
 -- @callChan@ family of client API functions can alleviate this, by using (and
 -- matching on) a private typed channel instead, but the server must be written
--- to accomodate this. Similar gains can be had using a /control channel/,
--- though only one /control channel/ is allowed per process definition, limiting
--- the input space to just one type.
+-- to accomodate this. Similar gains can be had using a /control channel/ and
+-- providing a typed reply channel in the request data, however the 'call'
+-- mechanism does not support this notion, so not only are we unable
+-- to use the various /reply/ functions, client code should also consider
+-- monitoring the server's pid and handling server failures whilst waiting on
 --
 -----------------------------------------------------------------------------
 

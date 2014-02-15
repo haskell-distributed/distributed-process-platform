@@ -136,18 +136,18 @@ continue = return . ProcessContinue
 continue_ :: (s -> Process (ProcessAction s))
 continue_ = return . ProcessContinue
 
--- | Instructs the process to wait for incoming messages until 'TimeInterval'
+-- | Instructs the process loop to wait for incoming messages until 'Delay'
 -- is exceeded. If no messages are handled during this period, the /timeout/
 -- handler will be called. Note that this alters the process timeout permanently
--- such that the given @TimeInterval@ will remain in use until changed.
-timeoutAfter :: TimeInterval -> s -> Process (ProcessAction s)
+-- such that the given @Delay@ will remain in use until changed.
+timeoutAfter :: Delay -> s -> Process (ProcessAction s)
 timeoutAfter d s = return $ ProcessTimeout d s
 
 -- | Version of 'timeoutAfter' that can be used in handlers that ignore process state.
 --
 -- > action (\(TimeoutPlease duration) -> timeoutAfter_ duration)
 --
-timeoutAfter_ :: TimeInterval -> (s -> Process (ProcessAction s))
+timeoutAfter_ :: Delay -> (s -> Process (ProcessAction s))
 timeoutAfter_ d = return . ProcessTimeout d
 
 -- | Instructs the process to /hibernate/ for the given 'TimeInterval'. Note
@@ -182,9 +182,16 @@ stop_ :: ExitReason -> (s -> Process (ProcessAction s))
 stop_ r _ = stop r
 
 -- | Sends a reply explicitly to a caller.
+--
+-- > replyTo = sendTo
+--
 replyTo :: (Serializable m) => CallRef m -> m -> Process ()
 replyTo = sendTo
 
+-- | Sends a reply to a 'SendPort' (for use in 'handleRpcChan' et al).
+--
+-- > replyChan = sendChan
+--
 replyChan :: (Serializable m) => SendPort m -> m -> Process ()
 replyChan = sendChan
 

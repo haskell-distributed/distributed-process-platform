@@ -95,7 +95,7 @@ newtype RestrictedProcess s a = RestrictedProcess {
 -- | The result of a 'call' handler's execution.
 data Result a =
     Reply     a              -- ^ reply with the given term
-  | Timeout   TimeInterval a -- ^ reply with the given term and enter timeout
+  | Timeout   Delay a        -- ^ reply with the given term and enter timeout
   | Hibernate TimeInterval a -- ^ reply with the given term and hibernate
   | Stop      ExitReason     -- ^ stop the process with the given reason
   deriving (Typeable)
@@ -103,7 +103,7 @@ data Result a =
 -- | The result of a safe 'cast' handler's execution.
 data RestrictedAction =
     RestrictedContinue               -- ^ continue executing
-  | RestrictedTimeout   TimeInterval -- ^ timeout if no messages are received
+  | RestrictedTimeout   Delay        -- ^ timeout if no messages are received
   | RestrictedHibernate TimeInterval -- ^ hibernate (i.e., sleep)
   | RestrictedStop      ExitReason   -- ^ stop/terminate the server process
 
@@ -153,16 +153,16 @@ haltNoReply r = noReply (Stop r)
 continue :: forall s . RestrictedProcess s RestrictedAction
 continue = return RestrictedContinue
 
--- | Instructs the process to wait for incoming messages until 'TimeInterval'
+-- | Instructs the process loop to wait for incoming messages until 'Delay'
 -- is exceeded. If no messages are handled during this period, the /timeout/
 -- handler will be called. Note that this alters the process timeout permanently
--- such that the given @TimeInterval@ will remain in use until changed.
-timeoutAfter :: forall s. TimeInterval -> RestrictedProcess s RestrictedAction
+-- such that the given @Delay@ will remain in use until changed.
+timeoutAfter :: forall s. Delay -> RestrictedProcess s RestrictedAction
 timeoutAfter d = return $ RestrictedTimeout d
 
 -- | Instructs the process to /hibernate/ for the given 'TimeInterval'. Note
 -- that no messages will be removed from the mailbox until after hibernation has
--- ceased. This is equivalent to calling @threadDelay@.
+-- ceased. This is equivalent to evaluating @liftIO . threadDelay@.
 --
 hibernate :: forall s. TimeInterval -> RestrictedProcess s RestrictedAction
 hibernate d = return $ RestrictedHibernate d
