@@ -75,11 +75,12 @@
 --
 -- [Post API and Relaying]
 --
--- For messages to be properly handled by the mailbox, they /must/ be sent
--- via the 'post' API. Messages sent directly to the mailbox (via @send@ or
--- the @Addressable@ type class @sendTo@ function) /will not be handled via
--- the internal buffers/ or subjected to the mailbox limits. Instead, they
--- will simply be relayed (i.e., forwarded) directly to the owner.
+-- For messages to be properly handled by the mailbox, they can either be sent
+-- via the 'post' API or directly to the 'Mailbox'. Messages sent directly to
+-- the mailbox will still be handled via the internal buffers and subjected to
+-- the mailbox limits. The 'post' API is really just a means to ensure that
+-- the conversion from @Serializable a -> Message@ is done in the caller's
+-- process and uses the safe @wrapMessage@ variant.
 --
 -- [Acknowledgements]
 --
@@ -93,6 +94,7 @@ module Control.Distributed.Process.Platform.Execution.Mailbox
     -- * Creating, Starting, Configuring and Running a Mailbox
     Mailbox()
   , startMailbox
+  , startSupervised
   , startSupervisedMailbox
   , createMailbox
   , resize
@@ -143,6 +145,7 @@ import Control.Distributed.Process.Platform.ManagedProcess
   , channelControlPort
   , handleControlChan
   , handleInfo
+  , handleRaw
   , continue
   , defaultProcess
   , UnhandledMessagePolicy(..)
@@ -422,9 +425,30 @@ startMailbox :: ProcessId -> BufferType -> Limit -> Process Mailbox
 startMailbox = doStartMailbox Nothing
 
 -- | As 'startMailbox', but suitable for use in supervisor child specs.
+-- This variant is for use when you want to access to the underlying
+-- 'Mailbox' handle in your supervised child refs. See supervisor's
+-- @ChildRef@ data type for more information.
+--
+-- Example:
+-- > childSpec = toChildStart $ startSupervised pid bufferType mboxLimit
+--
+-- See "Control.Distributed.Process.Platform.Supervisor"
+--
+startSupervised :: ProcessId
+                -> BufferType
+                -> Limit
+                -> SupervisorPid
+                -> Process (ProcessId, Message)
+startSupervised p b l s = do
+  mb <- startSupervisedMailbox p b l s
+  return (pid mb, unsafeWrapMessage mb)
+
+-- | As 'startMailbox', but suitable for use in supervisor child specs.
 --
 -- Example:
 -- > childSpec = toChildStart $ startSupervisedMailbox pid bufferType mboxLimit
+--
+-- See "Control.Distributed.Process.Platform.Supervisor"
 --
 startSupervisedMailbox :: ProcessId
                        -> BufferType
@@ -542,7 +566,8 @@ processDefinition pid tc cc = do
                                handleControlChan     cc handleControlMessages
                              , Restricted.handleCall handleGetStats
                              ]
-                          , infoHandlers = [handleInfo handlePost]
+                          , infoHandlers = [ handleInfo handlePost
+                                           , handleRaw  handleRawInputs ]
                           , unhandledMessagePolicy = DeadLetter pid
                           } :: Process (ProcessDefinition State)
 
@@ -569,6 +594,9 @@ handleControlMessages st cm
 
 handleGetStats :: StatsReq -> RestrictedProcess State (Result MailboxStats)
 handleGetStats _ = Restricted.reply . (^. stats) =<< getState
+
+handleRawInputs :: State -> Message -> Process (ProcessAction State)
+handleRawInputs st msg = handlePost st (Post msg)
 
 handlePost :: State -> Post -> Process (ProcessAction State)
 handlePost st (Post msg) = do

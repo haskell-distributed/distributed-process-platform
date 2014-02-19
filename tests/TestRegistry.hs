@@ -16,7 +16,6 @@ import Control.Distributed.Process.Platform
   )
 import Control.Distributed.Process.Platform.Service.Registry
   ( Registry(..)
-  , Keyable
   , KeyUpdateEvent(..)
   , RegistryKeyMonitorNotification(..)
   , addName
@@ -43,7 +42,6 @@ import qualified Control.Distributed.Process.Platform.Service.Registry as Regist
 import Control.Distributed.Process.Platform.Test
 import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process.Platform.Timer (sleep)
-import Control.Distributed.Process.Serializable
 import Control.Monad (void, forM_, forM)
 import Control.Rematch
   ( equalTo

@@ -612,6 +612,7 @@ awaitTimeout a d k = do
     let recv = case d of
                  Infinity -> receiveWait matches' >>= return . Just
                  Delay t  -> receiveTimeout (asTimeout t) matches'
+                 NoDelay  -> receiveTimeout 0 matches'
     recv >>= return . maybe AwaitTimeout id
   where
     forceResolve addr = do
