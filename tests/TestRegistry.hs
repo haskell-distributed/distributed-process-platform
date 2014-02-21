@@ -407,10 +407,8 @@ testMonitorUnregistration reg = do
 testMonitorRegistration :: Registry String () -> Process ()
 testMonitorRegistration reg = do
   kRef <- Registry.monitorName reg "my.proc"
-  pid <- spawnLocal $ do
-    void $ addName reg "my.proc"
-    expect :: Process ()
-  res <- receiveTimeout (after 2 Seconds) [
+  pid <- spawnSignalled (addName reg "my.proc") $ const expect
+  res <- receiveTimeout (after 5 Seconds) [
       matchIf (\(RegistryKeyMonitorNotification k ref _ _) ->
                 k == "my.proc" && ref == kRef)
               (\(RegistryKeyMonitorNotification _ _ ev _) -> return ev)
