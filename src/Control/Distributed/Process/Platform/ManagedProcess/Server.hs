@@ -256,7 +256,7 @@ handleCall = handleCallIf $ state (const True)
 -- monad. Given a function @f :: (s -> a -> Process (ProcessReply b s))@,
 -- the expression @handleCall f@ will yield a 'Dispatcher' for inclusion
 -- in a 'Behaviour' specification for the /GenProcess/. Messages are only
--- dispatched to the handler if the supplied condition evaluates to @True@
+-- dispatched to the handler if the supplied condition evaluates to @True@.
 --
 handleCallIf :: forall s a b . (Serializable a, Serializable b)
     => Condition s a -- ^ predicate that must be satisfied for the handler to run
@@ -276,11 +276,15 @@ handleCallIf cond handler
         doHandle h s (CallMessage p c) = (h s p) >>= mkReply c
         doHandle _ _ _ = die "CALL_HANDLER_TYPE_MISMATCH" -- note [Message type]
 
+-- | A variant of 'handleCallFrom_' that ignores the state argument.
+--
 handleCallFrom_ :: forall s a b . (Serializable a, Serializable b)
                 => (CallRef b -> a -> Process (ProcessReply b s))
                 -> Dispatcher s
 handleCallFrom_ = handleCallFromIf_ $ input (const True)
 
+-- | A variant of 'handleCallFromIf' that ignores the state argument.
+--
 handleCallFromIf_ :: forall s a b . (Serializable a, Serializable b)
                   => (Condition s a)
                   -> (CallRef b -> a -> Process (ProcessReply b s))
@@ -330,22 +334,19 @@ handleCallFromIf cond handler
         doHandle h s (CallMessage p c) = (h s c p) >>= mkReply c
         doHandle _ _ _ = die "CALL_HANDLER_TYPE_MISMATCH" -- note [Message type]
 
-handleRpcChan_ :: forall a b . (Serializable a, Serializable b)
-                  => (SendPort b -> a -> Process (ProcessAction ()))
-                  -> Dispatcher ()
-handleRpcChan_ h = handleRpcChan (\() -> h)
-
-handleRpcChanIf_ :: forall a b . (Serializable a, Serializable b)
-                 => Condition () a
-                 -> (SendPort b -> a -> Process (ProcessAction ()))
-                 -> Dispatcher ()
-handleRpcChanIf_ c h = handleRpcChanIf c (\() -> h)
-
+-- | Creates a handler for a /typed channel/ RPC style interaction. The
+-- handler takes a @SendPort b@ to reply to, the initial input and evaluates
+-- to a 'ProcessAction'. It is the handler code's responsibility to send the
+-- reply to the @SendPort@.
+--
 handleRpcChan :: forall s a b . (Serializable a, Serializable b)
               => (s -> SendPort b -> a -> Process (ProcessAction s))
               -> Dispatcher s
 handleRpcChan = handleRpcChanIf $ input (const True)
 
+-- | As 'handleRpcChan', but only evaluates the handler if the supplied
+-- condition is met.
+--
 handleRpcChanIf :: forall s a b . (Serializable a, Serializable b)
                 => Condition s a
                 -> (s -> SendPort b -> a -> Process (ProcessAction s))
@@ -362,6 +363,21 @@ handleRpcChanIf c h
                  -> Process (ProcessAction s)
         doHandle h' s (ChanMessage p c') = h' s c' p
         doHandle _  _ _ = die "RPC_HANDLER_TYPE_MISMATCH" -- node [Message type]
+
+-- | A variant of 'handleRpcChan' that ignores the state argument.
+--
+handleRpcChan_ :: forall a b . (Serializable a, Serializable b)
+                  => (SendPort b -> a -> Process (ProcessAction ()))
+                  -> Dispatcher ()
+handleRpcChan_ h = handleRpcChan (\() -> h)
+
+-- | A variant of 'handleRpcChanIf' that ignores the state argument.
+--
+handleRpcChanIf_ :: forall a b . (Serializable a, Serializable b)
+                 => Condition () a
+                 -> (SendPort b -> a -> Process (ProcessAction ()))
+                 -> Dispatcher ()
+handleRpcChanIf_ c h = handleRpcChanIf c (\() -> h)
 
 -- | Constructs a 'cast' handler from an ordinary function in the 'Process'
 -- monad.
