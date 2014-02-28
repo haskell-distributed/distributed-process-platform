@@ -26,6 +26,7 @@ import Control.Distributed.Process.Platform.Internal.Types
   ( ExitReason(..)
   , Shutdown(..)
   )
+import qualified Control.Distributed.Process.Platform.Service.SystemLog as Log
 import Control.Distributed.Process.Platform.Time
 import Control.Distributed.Process.Platform.Timer
   ( cancelTimer
@@ -315,4 +316,8 @@ applyPolicy p s m =
     Terminate      -> stop $ ExitOther "UnhandledInput"
     DeadLetter pid -> forward m pid >> continue s
     Drop           -> continue s
+    Log            -> logIt >> continue s
+  where
+    logIt =
+      Log.report Log.info Log.logChannel $ "Unhandled Gen Input Message: " ++ (show m)
 
