@@ -12,7 +12,7 @@
 --
 -- The concept of a /message exchange/ is borrowed from the world of
 -- messaging and enterprise integration. The /exchange/ acts like a kind of
--- mailbox, accepting inputs from /producers/ and forwarding these messaages
+-- mailbox, accepting inputs from /producers/ and forwarding these messages
 -- to one or more /consumers/, depending on the implementation's semantics.
 --
 -- This module provides some basic types of message exchange and exposes an API
@@ -59,7 +59,7 @@
 -- @Message@ (from "Control.Distributed.Process") and is responsible for
 -- decoding the message and updating its own state (if required). It is via
 -- this callback that custom exchange types can receive information about
--- clients and handle it in thier own way. The 'routeEx' callback is evaluated
+-- clients and handle it in their own way. The 'routeEx' callback is evaluated
 -- with the exchange type's own internal state and the 'Message' originally
 -- sent to the exchange process (via 'post') and is responsible for delivering
 -- the message to its clients in whatever way makes sense for that exchange

@@ -338,6 +338,7 @@ data PrioritisedProcessDefinition s =
 data UnhandledMessagePolicy =
     Terminate  -- ^ stop immediately, giving @ExitOther "UnhandledInput"@ as the reason
   | DeadLetter ProcessId -- ^ forward the message to the given recipient
+  | Log                  -- ^ log messages, then behave identically to @Drop@
   | Drop                 -- ^ dequeue and then drop/ignore the message
 
 -- | Stores the functions that determine runtime behaviour in response to

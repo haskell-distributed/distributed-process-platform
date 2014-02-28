@@ -98,7 +98,13 @@ import Data.Accessor
 import Data.Binary
 import Data.Typeable (Typeable)
 import GHC.Generics
+
+#if ! MIN_VERSION_base(4,6,0)
+import Prelude hiding (catch, error, Read)
+#else
 import Prelude hiding (error, Read)
+#endif
+
 import System.IO
   ( IOMode(AppendMode)
   , BufferMode(..)

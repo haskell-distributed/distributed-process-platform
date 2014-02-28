@@ -3,11 +3,14 @@ language: haskell
 env:
   matrix:
     - GHCVER=7.4.2
+    - GHCVER=7.6.1
+    - GHCVER=7.6.2
     - GHCVER=7.6.3
   global:
     - CABALVER=1.18
 
 before_install:
+  - rm -rf travis
   - git clone http://github.com/haskell-distributed/haskell-distributed-travis travis
   - source travis/scripts/set_env.sh
   - ./travis/scripts/before_install.sh
@@ -26,7 +29,6 @@ notifications:
     channels:
       - "irc.freenode.org#haskell-distributed"
     use_notice: true
-    skip_join: true
     template:
       - "\x0313d-p-platform\x03/\x0306%{branch}\x03 \x0314%{commit}\x03 %{build_url} %{message}"
 

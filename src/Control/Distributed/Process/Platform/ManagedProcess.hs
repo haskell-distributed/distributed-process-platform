@@ -233,7 +233,7 @@
 --
 -- For advanced users and those requiring very low latency, a prioritised
 -- process definition might not be suitable, since it performs considerable
--- work /behind the scenes/. There are also designs that wish to segregate a
+-- work /behind the scenes/. There are also designs that need to segregate a
 -- process' /control plane/ from other kinds of traffic it is expected to
 -- receive. For such use cases, a /control channel/ may prove a better choice,
 -- since typed channels are already prioritised during the mailbox scans that
