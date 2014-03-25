@@ -59,6 +59,7 @@ import Control.Distributed.Process.Platform.Internal.Types
   , Resolvable(..)
   , Routable(..)
   , NFSerializable
+  , resolveOrDie
   )
 import Control.Distributed.Process.Platform.Time
 import Control.DeepSeq (NFData)
@@ -373,38 +374,26 @@ data ProcessDefinition s = ProcessDefinition {
 -- TODO: Generify this /call/ API and use it in Call.hs to avoid tagging
 
 -- TODO: the code below should be moved elsewhere. Maybe to Client.hs?
-
-_resolveOrDie  :: (Routable a, Resolvable a)
-               => a -> String -> (ProcessId -> Process b) -> Process b
-_resolveOrDie addressable failureMsgPrefix action = do
-  result <- resolve addressable
-  case result of
-    Nothing -> die $ failureMsgPrefix ++ unresolvableMessage addressable
-    Just pid -> action pid
-
-initCall :: forall s a b . (Addressable s,
-                            Serializable a, Serializable b)
+initCall :: forall s a b . (Addressable s, Serializable a, Serializable b)
          => s -> a -> Process (CallRef b)
-initCall sid msg =
-  let failureMsgPrefix = "initCall: unresolveable address "
-  in _resolveOrDie sid failureMsgPrefix $ \pid -> do
-    mRef <- monitor pid
-    self <- getSelfPid
-    let cRef = makeRef (Pid self) mRef in do
-      sendTo pid (CallMessage msg cRef :: Message a b)
-      return cRef
+initCall sid msg = do
+  pid <- resolveOrDie sid "initCall: unresolveable address "
+  mRef <- monitor pid
+  self <- getSelfPid
+  let cRef = makeRef (Pid self) mRef in do
+    sendTo pid (CallMessage msg cRef :: Message a b)
+    return cRef
 
 unsafeInitCall :: forall s a b . (Addressable s,
                                   NFSerializable a, NFSerializable b)
          => s -> a -> Process (CallRef b)
-unsafeInitCall sid msg =
-  let failureMsgPrefix = "unsafeInitCall: unresolveable address "
-  in _resolveOrDie sid failureMsgPrefix $ \pid -> do
-      mRef <- monitor pid
-      self <- getSelfPid
-      let cRef = makeRef (Pid self) mRef in do
-        unsafeSendTo pid (CallMessage msg cRef  :: Message a b)
-        return cRef
+unsafeInitCall sid msg = do
+  pid <- resolveOrDie sid "unsafeInitCall: unresolveable address "
+  mRef <- monitor pid
+  self <- getSelfPid
+  let cRef = makeRef (Pid self) mRef in do
+    unsafeSendTo pid (CallMessage msg cRef  :: Message a b)
+    return cRef
 
 waitResponse :: forall b. (Serializable b)
              => Maybe TimeInterval
