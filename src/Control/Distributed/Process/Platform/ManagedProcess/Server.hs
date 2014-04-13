@@ -498,7 +498,7 @@ handleDispatchIf cond handler = DispatchIf {
                 (CastMessage p)   -> (h s p)
                 (ChanMessage p _) -> (h s p)
 
--- | Creates a generic input handler (i.e., for recieved messages that are /not/
+-- | Creates a generic input handler (i.e., for received messages that are /not/
 -- sent using the 'cast' or 'call' APIs) from an ordinary function in the
 -- 'Process' monad.
 handleInfo :: forall s a. (Serializable a)
