@@ -59,6 +59,7 @@ import Control.Distributed.Process.Platform.Internal.Types
   , Resolvable(..)
   , Routable(..)
   , NFSerializable
+  , resolveOrDie
   )
 import Control.Distributed.Process.Platform.Time
 import Control.DeepSeq (NFData)
@@ -372,26 +373,26 @@ data ProcessDefinition s = ProcessDefinition {
 
 -- TODO: Generify this /call/ API and use it in Call.hs to avoid tagging
 
-initCall :: forall s a b . (Addressable s,
-                            Serializable a, Serializable b)
+-- TODO: the code below should be moved elsewhere. Maybe to Client.hs?
+initCall :: forall s a b . (Addressable s, Serializable a, Serializable b)
          => s -> a -> Process (CallRef b)
 initCall sid msg = do
-  (Just pid) <- resolve sid
+  pid <- resolveOrDie sid "initCall: unresolveable address "
   mRef <- monitor pid
   self <- getSelfPid
   let cRef = makeRef (Pid self) mRef in do
-    sendTo pid $ ((CallMessage msg cRef) :: Message a b)
+    sendTo pid (CallMessage msg cRef :: Message a b)
     return cRef
 
 unsafeInitCall :: forall s a b . (Addressable s,
                                   NFSerializable a, NFSerializable b)
          => s -> a -> Process (CallRef b)
 unsafeInitCall sid msg = do
-  (Just pid) <- resolve sid
+  pid <- resolveOrDie sid "unsafeInitCall: unresolveable address "
   mRef <- monitor pid
   self <- getSelfPid
   let cRef = makeRef (Pid self) mRef in do
-    unsafeSendTo pid $ ((CallMessage msg cRef) :: Message a b)
+    unsafeSendTo pid (CallMessage msg cRef  :: Message a b)
     return cRef
 
 waitResponse :: forall b. (Serializable b)
