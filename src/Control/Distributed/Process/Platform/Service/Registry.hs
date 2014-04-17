@@ -135,7 +135,6 @@ import Control.Distributed.Process.Platform.ManagedProcess
   , input
   , defaultProcess
   , prioritised
-  , InitHandler
   , InitResult(..)
   , ProcessAction
   , ProcessReply
@@ -312,10 +311,6 @@ data KeyUpdateEvent =
   deriving (Typeable, Generic, Eq, Show)
 instance Binary KeyUpdateEvent where
 
-reason :: KeyUpdateEvent -> DiedReason
-reason (KeyOwnerDied dr) = dr
-reason _                 = DiedNormal
-
 -- | This message is delivered to processes which are monioring a
 -- registry key. The opaque monitor reference will match (i.e., be equal
 -- to) the reference returned from the @monitor@ function, which the
@@ -453,14 +448,14 @@ run _ =
 -- Client Facing API                                                          --
 --------------------------------------------------------------------------------
 
--- | Sends a message to the process, or processes, corresponding to @key@.
--- If Key belongs to a unique object (name or aggregated counter), this
--- function will send a message to the corresponding process, or fail if there
--- is no such process. If Key is for a non-unique object type (counter or
--- property), Msg will be send to all processes that have such an object.
---
-dispatch svr ky msg = undefined
-  -- TODO: do a local-lookup and then sendTo the target
+-- -- | Sends a message to the process, or processes, corresponding to @key@.
+-- -- If Key belongs to a unique object (name or aggregated counter), this
+-- -- function will send a message to the corresponding process, or fail if there
+-- -- is no such process. If Key is for a non-unique object type (counter or
+-- -- property), Msg will be send to all processes that have such an object.
+-- --
+-- dispatch svr ky msg = undefined
+--   -- TODO: do a local-lookup and then sendTo the target
 
 -- | Associate the calling process with the given (unique) key.
 addName :: forall k v. (Keyable k)
@@ -953,7 +948,7 @@ handleUnmonitorReq :: forall k v. (Keyable k, Serializable v)
                  -> CallRef ()
                  -> UnmonitorReq
                  -> Process (ProcessReply () (State k v))
-handleUnmonitorReq state cRef (UnmonitorReq ref') = do
+handleUnmonitorReq state _cRef (UnmonitorReq ref') = do
   let pid = fst $ unRef ref'
   reply () $ ( (monitors ^: MultiMap.filter ((/= ref') . ref))
              . (listeningPids ^: Set.delete pid)
