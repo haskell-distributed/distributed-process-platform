@@ -165,7 +165,7 @@ hibernate_ :: TimeInterval -> (s -> Process (ProcessAction s))
 hibernate_ d = return . ProcessHibernate d
 
 -- | Instructs the process to terminate, giving the supplied reason. If a valid
--- 'terminateHandler' is installed, it will be called with the 'ExitReason'
+-- 'shutdownHandler' is installed, it will be called with the 'ExitReason'
 -- returned from this call, along with the process state.
 stop :: ExitReason -> Process (ProcessAction s)
 stop r = return $ ProcessStop r
