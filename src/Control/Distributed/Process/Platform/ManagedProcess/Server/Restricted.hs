@@ -168,7 +168,7 @@ hibernate :: forall s. TimeInterval -> RestrictedProcess s RestrictedAction
 hibernate d = return $ RestrictedHibernate d
 
 -- | Instructs the process to terminate, giving the supplied reason. If a valid
--- 'terminateHandler' is installed, it will be called with the 'ExitReason'
+-- 'shutdownHandler' is installed, it will be called with the 'ExitReason'
 -- returned from this call, along with the process state.
 stop :: forall s. ExitReason -> RestrictedProcess s RestrictedAction
 stop r = return $ RestrictedStop r
