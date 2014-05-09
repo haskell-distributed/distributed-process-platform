@@ -61,34 +61,54 @@ recvQueue :: PrioritisedProcessDefinition s
           -> Queue
           -> Process ExitReason
 recvQueue p s t q =
-  let pDef       = processDef p
-      ps         = priorities p
-      handleStop = shutdownHandler pDef
-  in do
-    (ac, d, q') <- processNext pDef ps s t q
-    case ac of
-      (ProcessContinue s')     -> recvQueueAux p ps s' d q'
-      (ProcessTimeout t' s')   -> recvQueueAux p ps s' t' q'
-      (ProcessHibernate d' s') -> block d' >> recvQueueAux p ps s' d q'
-      (ProcessStop r)          -> handleStop s r >> return (r :: ExitReason)
-      (ProcessStopping s' r)   -> handleStop s' r >> return (r :: ExitReason)
+  let pDef = processDef p
+      ps   = priorities p
+  in do (ac, d, q') <- catchExit (processNext pDef ps s t q)
+                                 (\_ (r :: ExitReason) ->
+                                   return (ProcessStop r, Infinity, q))
+        nextAction ac d q'
   where
-    recvQueueAux :: PrioritisedProcessDefinition s
-                 -> [DispatchPriority s]
-                 -> s
-                 -> Delay
-                 -> Queue
-                 -> Process ExitReason
-    recvQueueAux ppDef prioritizers pState delay queue = do
-      t' <- startTimer delay
-      drainMessageQueue pState prioritizers queue >>= recvQueue ppDef pState t'
+    nextAction ac d q'
+      | ProcessContinue  s'    <- ac = recvQueueAux p (priorities p) s' d  q'
+      | ProcessTimeout   t' s' <- ac = recvQueueAux p (priorities p) s' t' q'
+      | ProcessHibernate d' s' <- ac = block d' >> recvQueueAux p (priorities p) s' d q'
+      | ProcessStop      r     <- ac = (shutdownHandler $ processDef p) s r >> return r
+      | ProcessStopping  s' r  <- ac = (shutdownHandler $ processDef p) s' r >> return r
+      | otherwise {- compiler foo -} = die "IllegalState"
 
-    processNext :: ProcessDefinition s
-                -> [DispatchPriority s]
-                -> s
-                -> TimeoutSpec
-                -> Queue
-                -> Process (ProcessAction s, Delay, Queue)
+    recvQueueAux ppDef prioritizers pState delay queue =
+      let ex = (trapExit:(exitHandlers $ processDef ppDef))
+          eh = map (\d' -> (dispatchExit d') pState) ex
+      in (do t' <- startTimer delay
+             mq <- drainMessageQueue pState prioritizers queue
+             recvQueue ppDef pState t' mq)
+         `catchExit`
+         (\pid (reason :: ExitReason) -> do
+             let pd = processDef ppDef
+             let ps = pState
+             let pq = queue
+             let em = unsafeWrapMessage reason
+             (a, d, q') <- findExitHandlerOrStop pd ps pq eh pid em
+             nextAction a d q')
+
+    findExitHandlerOrStop :: ProcessDefinition s
+                          -> s
+                          -> Queue
+                          -> [ProcessId -> P.Message -> Process (Maybe (ProcessAction s))]
+                          -> ProcessId
+                          -> P.Message
+                          -> Process (ProcessAction s, Delay, Queue)
+    findExitHandlerOrStop _ _ pq [] _ er = do
+      mEr <- unwrapMessage er :: Process (Maybe ExitReason)
+      case mEr of
+        Nothing -> die "InvalidExitHandler"  -- TODO: better error message?
+        Just er' -> return (ProcessStop er', Infinity, pq)
+    findExitHandlerOrStop pd ps pq (eh:ehs) pid er = do
+      mAct <- eh pid er
+      case mAct of
+        Nothing -> findExitHandlerOrStop pd ps pq ehs pid er
+        Just pa -> return (pa, Infinity, pq)
+
     processNext def ps' pState tSpec queue =
       let ex = (trapExit:(exitHandlers def))
           h  = timeoutHandler def in do
@@ -109,10 +129,6 @@ recvQueue p s t q =
                                    (map (\d' -> (dispatchExit d') s') ex)
                 return (act, t', q')
 
-    processApply :: ProcessDefinition s
-                 -> s
-                 -> P.Message
-                 -> Process (ProcessAction s)
     processApply def pState msg =
       let pol          = unhandledMessagePolicy def
           apiMatchers  = map (dynHandleMessage pol pState) (apiHandlers def)
@@ -121,11 +137,6 @@ recvQueue p s t q =
           ms'          = (shutdown':apiMatchers) ++ infoMatchers
       in processApplyAux ms' pol pState msg
 
-    processApplyAux :: [(P.Message -> Process (Maybe (ProcessAction s)))]
-                    -> UnhandledMessagePolicy
-                    -> s
-                    -> P.Message
-                    -> Process (ProcessAction s)
     processApplyAux []     p' s' m' = applyPolicy p' s' m'
     processApplyAux (h:hs) p' s' m' = do
       attempt <- h m'
@@ -133,12 +144,6 @@ recvQueue p s t q =
         Nothing  -> processApplyAux hs p' s' m'
         Just act -> return act
 
-    drainOrTimeout :: s
-                   -> Delay
-                   -> Queue
-                   -> [DispatchPriority s]
-                   -> TimeoutHandler s
-                   -> Process (ProcessAction s, Delay, Queue)
     drainOrTimeout pState delay queue ps' h = do
       let matches = [ matchMessage return ]
           recv    = case delay of

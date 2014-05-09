@@ -40,7 +40,7 @@
 -- are received within the specified time span, a user defined 'timeoutHandler'
 -- will be called in order to determine the next action.
 --
--- The 'ProcessDefinition' type also defines a @terminateHandler@,
+-- The 'ProcessDefinition' type also defines a @shutdownHandler@,
 -- which is called whenever the process exits, whether because a callback has
 -- returned 'stop' as the next action, or as the result of unhandled exit signal
 -- or similar asynchronous exceptions thrown in (or to) the process itself.
@@ -179,7 +179,7 @@
 -- addition, a private /exit handler/ is installed for exit signals where
 -- @reason :: ExitReason@, which is a form of /exit signal/ used explicitly
 -- by the supervision APIs. This behaviour, which cannot be overriden, is to
--- gracefully shut down the process, calling the @terminateHandler@ as usual,
+-- gracefully shut down the process, calling the @shutdownHandler@ as usual,
 -- before stopping with @reason@ given as the final outcome.
 --
 -- /Example: handling custom data is @ProcessExitException@/
@@ -193,7 +193,7 @@
 -- callbacks however.
 --
 -- If any asynchronous exception goes unhandled, the process will immediately
--- exit without running the @terminateHandler@. It is very important to note
+-- exit without running the @shutdownHandler@. It is very important to note
 -- that in Cloud Haskell, link failures generate asynchronous exceptions in
 -- the target and these will NOT be caught by the API and will therefore
 -- cause the process to exit /without running the termination handler/

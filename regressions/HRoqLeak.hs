@@ -187,7 +187,7 @@ serverDefinition = defaultProcess {
            handleInfo (\dict (ProcessMonitorNotification _ _ r) -> do {logm $ show r; continue dict })
         ]
     , timeoutHandler = \_ _ -> stop $ TerminateOther "timeout az"
-    , terminateHandler = \_ reason -> do { logm $ "HroqMnesia terminateHandler:" ++ (show reason) }
+    , shutdownHandler = \_ reason -> do { logm $ "HroqMnesia shutdownHandler:" ++ (show reason) }
     } :: ProcessDefinition State
 
 -- ---------------------------------------------------------------------

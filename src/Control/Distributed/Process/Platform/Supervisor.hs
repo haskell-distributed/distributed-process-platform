@@ -227,6 +227,8 @@ module Control.Distributed.Process.Platform.Supervisor
   , Child
   , StaticLabel
   , SupervisorPid
+  , ChildPid
+  , StarterPid
   , ToChildStart(..)
   , start
   , run
@@ -239,6 +241,7 @@ module Control.Distributed.Process.Platform.Supervisor
   , RestartMode(..)
   , RestartOrder(..)
   , RestartStrategy(..)
+  , ShutdownMode(..)
   , restartOne
   , restartAll
   , restartLeft
@@ -269,6 +272,8 @@ module Control.Distributed.Process.Platform.Supervisor
   ) where
 
 import Control.DeepSeq (NFData)
+
+import Control.Distributed.Process.Platform.Supervisor.Types
 import Control.Distributed.Process hiding (call)
 import Control.Distributed.Process.Serializable()
 import Control.Distributed.Process.Platform.Internal.Primitives hiding (monitor)
@@ -332,7 +337,7 @@ import Control.Distributed.Process.Platform.Service.SystemLog
   )
 import qualified Control.Distributed.Process.Platform.Service.SystemLog as Log
 import Control.Distributed.Process.Platform.Time
-import Control.Exception (SomeException, Exception, throwIO)
+import Control.Exception (SomeException, throwIO)
 
 import Control.Monad.Error
 
@@ -379,270 +384,8 @@ import GHC.Generics
 -- Types                                                                      --
 --------------------------------------------------------------------------------
 
--- external client/configuration API
-
-newtype MaxRestarts = MaxR { maxNumberOfRestarts :: Int }
-  deriving (Typeable, Generic, Show)
-instance Binary MaxRestarts where
-instance NFData MaxRestarts where
-
--- | Smart constructor for @MaxRestarts@. The maximum
--- restart count must be a positive integer.
-maxRestarts :: Int -> MaxRestarts
-maxRestarts r | r >= 0    = MaxR r
-              | otherwise = error "MaxR must be >= 0"
-
--- | A compulsary limit on the number of restarts that a supervisor will
--- tolerate before it terminates all child processes and then itself.
--- If > @MaxRestarts@ occur within the specified @TimeInterval@, termination
--- will occur. This prevents the supervisor from entering an infinite loop of
--- child process terminations and restarts.
---
-data RestartLimit =
-  RestartLimit
-  { maxR :: !MaxRestarts
-  , maxT :: !TimeInterval
-  }
-  deriving (Typeable, Generic, Show)
-instance Binary RestartLimit where
-instance NFData RestartLimit where
-
-limit :: MaxRestarts -> TimeInterval -> RestartLimit
-limit mr ti = RestartLimit mr ti
-
-defaultLimits :: RestartLimit
-defaultLimits = limit (MaxR 1) (seconds 1)
-
-data RestartOrder = LeftToRight | RightToLeft
-  deriving (Typeable, Generic, Eq, Show)
-instance Binary RestartOrder where
-instance NFData RestartOrder where
-
--- TODO: rename these, somehow...
-data RestartMode =
-    RestartEach     { order :: !RestartOrder }
-    {- ^ stop then start each child sequentially, i.e., @foldlM stopThenStart children@ -}
-  | RestartInOrder  { order :: !RestartOrder }
-    {- ^ stop all children first, then restart them sequentially -}
-  | RestartRevOrder { order :: !RestartOrder }
-    {- ^ stop all children in the given order, but start them in reverse -}
-  deriving (Typeable, Generic, Show, Eq)
-instance Binary RestartMode where
-instance NFData RestartMode where
-
--- | Strategy used by a supervisor to handle child restarts, whether due to
--- unexpected child failure or explicit restart requests from a client.
---
--- Some terminology: We refer to child processes managed by the same supervisor
--- as /siblings/. When restarting a child process, the 'RestartNone' policy
--- indicates that sibling processes should be left alone, whilst the 'RestartAll'
--- policy will cause /all/ children to be restarted (in the same order they were
--- started). ************************************************************************
--- The other two restart strategies refer to /prior/ and /subsequent/
--- siblings, which describe's those children's configured position
--- (i.e., insertion order). These latter modes allow one to control the order
--- in which siblings are restarted, and to exclude some siblings from the restart
--- without having to resort to grouping them using a child supervisor.
---
-data RestartStrategy =
-    RestartOne
-    { intensity :: !RestartLimit } -- ^ restart only the failed child process
-  | RestartAll
-    { intensity :: !RestartLimit
-    , mode      :: !RestartMode
-    } -- ^ also restart all siblings
-  | RestartLeft
-    { intensity :: !RestartLimit
-    , mode      :: !RestartMode
-    } -- ^ restart prior siblings (i.e., prior /start order/)
-  | RestartRight
-    { intensity :: !RestartLimit
-    , mode      :: !RestartMode
-    } -- ^ restart subsequent siblings (i.e., subsequent /start order/)
-  deriving (Typeable, Generic, Show)
-instance Binary RestartStrategy where
-instance NFData RestartStrategy where
-
--- | Provides a default 'RestartStrategy' for @RestartOne@.
--- > restartOne = RestartOne defaultLimits
---
-restartOne :: RestartStrategy
-restartOne = RestartOne defaultLimits
-
--- | Provides a default 'RestartStrategy' for @RestartAll@.
--- > restartOne = RestartAll defaultLimits (RestartEach LeftToRight)
---
-restartAll :: RestartStrategy
-restartAll = RestartAll defaultLimits (RestartEach LeftToRight)
-
--- | Provides a default 'RestartStrategy' for @RestartLeft@.
--- > restartOne = RestartLeft defaultLimits (RestartEach LeftToRight)
---
-restartLeft :: RestartStrategy
-restartLeft = RestartLeft defaultLimits (RestartEach LeftToRight)
-
--- | Provides a default 'RestartStrategy' for @RestartRight@.
--- > restartOne = RestartRight defaultLimits (RestartEach LeftToRight)
---
-restartRight :: RestartStrategy
-restartRight = RestartRight defaultLimits (RestartEach LeftToRight)
-
--- | Identifies a child process by name.
-type ChildKey = String
-
--- | A reference to a (possibly running) child.
-data ChildRef =
-    ChildRunning !ProcessId    -- ^ a reference to the (currently running) child
-  | ChildRunningExtra !ProcessId !Message -- ^ also a currently running child, with /extra/ child info
-  | ChildRestarting !ProcessId -- ^ a reference to the /old/ (previous) child (now restarting)
-  | ChildStopped               -- ^ indicates the child is not currently running
-  | ChildStartIgnored          -- ^ a non-temporary child exited with 'ChildInitIgnore'
-  deriving (Typeable, Generic, Show)
-instance Binary ChildRef where
-instance NFData ChildRef where
-
-instance Eq ChildRef where
-  ChildRunning      p1   == ChildRunning      p2   = p1 == p2
-  ChildRunningExtra p1 _ == ChildRunningExtra p2 _ = p1 == p2
-  ChildRestarting   p1   == ChildRestarting   p2   = p1 == p2
-  ChildStopped           == ChildStopped           = True
-  ChildStartIgnored      == ChildStartIgnored      = True
-  _                      == _                      = False
-
-isRunning :: ChildRef -> Bool
-isRunning (ChildRunning _)        = True
-isRunning (ChildRunningExtra _ _) = True
-isRunning _                       = False
-
-isRestarting :: ChildRef -> Bool
-isRestarting (ChildRestarting _) = True
-isRestarting _                   = False
-
-instance Resolvable ChildRef where
-  resolve (ChildRunning pid)        = return $ Just pid
-  resolve (ChildRunningExtra pid _) = return $ Just pid
-  resolve _                         = return Nothing
-
--- these look a bit odd, but we basically want to avoid resolving
--- or sending to (ChildRestarting oldPid)
-instance Routable ChildRef where
-  sendTo (ChildRunning addr) = sendTo addr
-  sendTo _                   = error "invalid address for child process"
-
-  unsafeSendTo (ChildRunning ch) = unsafeSendTo ch
-  unsafeSendTo _                 = error "invalid address for child process"
-
--- | Specifies whether the child is another supervisor, or a worker.
-data ChildType = Worker | Supervisor
-  deriving (Typeable, Generic, Show, Eq)
-instance Binary ChildType where
-instance NFData ChildType where
-
--- | Describes when a terminated child process should be restarted.
-data RestartPolicy =
-    Permanent  -- ^ a permanent child will always be restarted
-  | Temporary  -- ^ a temporary child will /never/ be restarted
-  | Transient  -- ^ a transient child will be restarted only if it terminates abnormally
-  | Intrinsic  -- ^ as 'Transient', but if the child exits normally, the supervisor also exits normally
-  deriving (Typeable, Generic, Eq, Show)
-instance Binary RestartPolicy where
-instance NFData RestartPolicy where
-
-{-
-data ChildRestart =
-    Restart RestartPolicy  -- ^ restart according to the given policy
-  | DelayedRestart RestartPolicy TimeInterval  -- ^ perform a /delayed restart/
-  deriving (Typeable, Generic, Eq, Show)
-instance Binary ChildRestart where
--}
-
-data ChildTerminationPolicy =
-    TerminateTimeout !Delay
-  | TerminateImmediately
-  deriving (Typeable, Generic, Eq, Show)
-instance Binary ChildTerminationPolicy where
-instance NFData ChildTerminationPolicy where
-
-data RegisteredName =
-    LocalName          !String
-  | GlobalName         !String
-  | CustomRegister     !(Closure (ProcessId -> Process ()))
-  deriving (Typeable, Generic)
-instance Binary RegisteredName where
-instance NFData RegisteredName where
-
-instance Show RegisteredName where
-  show (CustomRegister _) = "Custom Register"
-  show (LocalName      n) = n
-  show (GlobalName     n) = "global::" ++ n
-
-data ChildStart =
-    RunClosure !(Closure (Process ()))
-  | CreateHandle !(Closure (SupervisorPid -> Process (ProcessId, Message)))
-  | StarterProcess !ProcessId
-  deriving (Typeable, Generic, Show)
-instance Binary ChildStart where
-instance NFData ChildStart  where
-
--- | Specification for a child process. The child must be uniquely identified
--- by it's @childKey@ within the supervisor. The supervisor will start the child
--- itself, therefore @childRun@ should contain the child process' implementation
--- e.g., if the child is a long running server, this would be the server /loop/,
--- as with e.g., @ManagedProces.start@.
-data ChildSpec = ChildSpec {
-    childKey     :: !ChildKey
-  , childType    :: !ChildType
-  , childRestart :: !RestartPolicy
-  , childStop    :: !ChildTerminationPolicy
-  , childStart   :: !ChildStart
-  , childRegName :: !(Maybe RegisteredName)
-  } deriving (Typeable, Generic, Show)
-instance Binary ChildSpec where
-instance NFData ChildSpec where
-
-data ChildInitFailure =
-    ChildInitFailure !String
-  | ChildInitIgnore
-  deriving (Typeable, Generic, Show)
-instance Exception ChildInitFailure where
-
-data SupervisorStats = SupervisorStats {
-    _children          :: Int
-  , _supervisors       :: Int
-  , _workers           :: Int
-  , _running           :: Int
-  , _activeSupervisors :: Int
-  , _activeWorkers     :: Int
-  -- TODO: usage/restart/freq stats
-  , totalRestarts      :: Int
-  } deriving (Typeable, Generic, Show)
-instance Binary SupervisorStats where
-instance NFData SupervisorStats where
-
--- | Static labels (in the remote table) are strings.
-type StaticLabel = String
-
--- | Provides failure information when (re-)start failure is indicated.
-data StartFailure =
-    StartFailureDuplicateChild !ChildRef -- ^ a child with this 'ChildKey' already exists
-  | StartFailureAlreadyRunning !ChildRef -- ^ the child is already up and running
-  | StartFailureBadClosure !StaticLabel  -- ^ a closure cannot be resolved
-  | StartFailureDied !DiedReason         -- ^ a child died (almost) immediately on starting
-  deriving (Typeable, Generic, Show, Eq)
-instance Binary StartFailure where
-instance NFData StartFailure where
-
--- | The result of a call to 'removeChild'.
-data DeleteChildResult =
-    ChildDeleted              -- ^ the child specification was successfully removed
-  | ChildNotFound             -- ^ the child specification was not found
-  | ChildNotStopped !ChildRef -- ^ the child was not removed, as it was not stopped.
-  deriving (Typeable, Generic, Show, Eq)
-instance Binary DeleteChildResult where
-instance NFData DeleteChildResult where
-
-type Child = (ChildRef, ChildSpec)
-type SupervisorPid = ProcessId
+-- TODO: ToChildStart belongs with rest of types in
+-- Control.Distributed.Process.Platform.Supervisor.Types
 
 -- | A type that can be converted to a 'ChildStart'.
 class ToChildStart a where
@@ -651,72 +394,76 @@ class ToChildStart a where
 instance ToChildStart (Closure (Process ())) where
   toChildStart = return . RunClosure
 
-instance ToChildStart (Closure (SupervisorPid -> Process (ProcessId, Message))) where
+instance ToChildStart (Closure (SupervisorPid -> Process (ChildPid, Message))) where
   toChildStart = return . CreateHandle
+
+
+-- StarterProcess variants of ChildStart
+
+expectTriple :: Process (SupervisorPid, ChildKey, SendPort ChildPid)
+expectTriple = expect
 
 instance ToChildStart (Process ()) where
   toChildStart proc = do
-    starterPid <- spawnLocal $ do
-      -- note [linking]: the first time we see the supervisor's pid,
-      -- we must link to it, but only once, otherwise we simply waste
-      -- time and resources creating duplicate links
-      (supervisor, _, sendPidPort) <- expectTriple
-      link supervisor
-      spawnIt proc supervisor sendPidPort
-      tcsProcLoop proc
-    return (StarterProcess starterPid)
+      starterPid <- spawnLocal $ do
+        -- note [linking]: the first time we see the supervisor's pid,
+        -- we must link to it, but only once, otherwise we simply waste
+        -- time and resources creating duplicate links
+        (supervisor, _, sendPidPort) <- expectTriple
+        link supervisor
+        spawnIt proc supervisor sendPidPort
+        tcsProcLoop proc
+      return (StarterProcess starterPid)
+    where
+      tcsProcLoop :: Process () -> Process ()
+      tcsProcLoop p = forever' $ do
+        (supervisor, _, sendPidPort) <- expectTriple
+        spawnIt p supervisor sendPidPort
 
-tcsProcLoop :: Process () -> Process ()
-tcsProcLoop p = forever' $ do
-  (supervisor, _, sendPidPort) <- expectTriple
-  spawnIt p supervisor sendPidPort
-
-spawnIt :: Process ()
-        -> ProcessId
-        -> SendPort ProcessId
-        -> Process ()
-spawnIt proc' supervisor sendPidPort = do
-  supervisedPid <- spawnLocal $ do
-    link supervisor
-    self <- getSelfPid
-    (proc' `catches` [ Handler $ filterInitFailures supervisor self
-                     , Handler $ logFailure supervisor self ])
-      `catchesExit` [(\_ m -> handleMessageIf m (== ExitShutdown)
-                                                (\_ -> return ()))]
-  sendChan sendPidPort supervisedPid
+      spawnIt :: Process ()
+              -> SupervisorPid
+              -> SendPort ChildPid
+              -> Process ()
+      spawnIt proc' supervisor sendPidPort = do
+        supervisedPid <- spawnLocal $ do
+          link supervisor
+          self <- getSelfPid
+          (proc' `catches` [ Handler $ filterInitFailures supervisor self
+                           , Handler $ logFailure supervisor self ])
+            `catchesExit` [\_ m -> handleMessageIf m (== ExitShutdown)
+                                                    (\_ -> return ())]
+        sendChan sendPidPort supervisedPid
 
 instance (Resolvable a) => ToChildStart (SupervisorPid -> Process a) where
   toChildStart proc = do
-    starterPid <- spawnLocal $ do
-      -- see note [linking] in the previous instance (above)
-      (supervisor, _, sendPidPort) <- expectTriple
-      link supervisor
-      injectIt proc supervisor sendPidPort >> injectorLoop proc
-    return $ StarterProcess starterPid
+      starterPid <- spawnLocal $ do
+        -- see note [linking] in the previous instance (above)
+        (supervisor, _, sendPidPort) <- expectTriple
+        link supervisor
+        injectIt proc supervisor sendPidPort >> injectorLoop proc
+      return $ StarterProcess starterPid
+    where
+      injectorLoop :: Resolvable a
+                   => (SupervisorPid -> Process a)
+                   -> Process ()
+      injectorLoop p = forever' $ do
+        (supervisor, _, sendPidPort) <- expectTriple
+        injectIt p supervisor sendPidPort
 
-injectorLoop :: Resolvable a
-             => (SupervisorPid -> Process a)
-             -> Process ()
-injectorLoop p = forever' $ do
-  (supervisor, _, sendPidPort) <- expectTriple
-  injectIt p supervisor sendPidPort
+      injectIt :: Resolvable a
+               => (SupervisorPid -> Process a)
+               -> SupervisorPid
+               -> SendPort ChildPid
+               -> Process ()
+      injectIt proc' supervisor sendPidPort = do
+        addr <- proc' supervisor
+        mPid <- resolve addr
+        case mPid of
+          Nothing -> die "UnresolvableAddress in startChild instance"
+          Just p  -> sendChan sendPidPort p
 
-injectIt :: Resolvable a
-         => (SupervisorPid -> Process a)
-         -> ProcessId
-         -> SendPort ProcessId
-         -> Process ()
-injectIt proc' supervisor sendPidPort = do
-  addr <- proc' supervisor
-  mPid <- resolve addr
-  case mPid of
-    Nothing -> die "UnresolvableAddress"
-    Just p  -> sendChan sendPidPort p
-
-expectTriple :: Process (ProcessId, ChildKey, SendPort ProcessId)
-expectTriple = expect
-
--- internal APIs
+-- internal APIs. The corresponding XxxResult types are in
+-- Control.Distributed.Process.Platform.Supervisor.Types
 
 data DeleteChild = DeleteChild !ChildKey
   deriving (Typeable, Generic)
@@ -747,26 +494,10 @@ instance NFData AddChildReq where
 
 data AddChildRes = Exists ChildRef | Added State
 
-data AddChildResult =
-    ChildAdded         !ChildRef
-  | ChildFailedToStart !StartFailure
-  deriving (Typeable, Generic, Show, Eq)
-instance Binary AddChildResult where
-instance NFData AddChildResult where
-
 data StartChildReq = StartChild !ChildKey
   deriving (Typeable, Generic)
 instance Binary StartChildReq where
 instance NFData StartChildReq where
-
-data StartChildResult =
-    ChildStartOk        !ChildRef
-  | ChildStartFailed    !StartFailure
-  | ChildStartUnknownId
-  | ChildStartInitIgnored
-  deriving (Typeable, Generic, Show, Eq)
-instance Binary StartChildResult where
-instance NFData StartChildResult where
 
 data RestartChildReq = RestartChildReq !ChildKey
   deriving (Typeable, Generic, Show, Eq)
@@ -779,29 +510,12 @@ data DelayedRestartReq = DelayedRestartReq !ChildKey !DiedReason
 instance Binary DelayedRestartReq where
 -}
 
-data RestartChildResult =
-    ChildRestartOk     !ChildRef
-  | ChildRestartFailed !StartFailure
-  | ChildRestartUnknownId
-  | ChildRestartIgnored
-  deriving (Typeable, Generic, Show, Eq)
-
-instance Binary RestartChildResult where
-instance NFData RestartChildResult where
-
 data TerminateChildReq = TerminateChildReq !ChildKey
   deriving (Typeable, Generic, Show, Eq)
 instance Binary TerminateChildReq where
 instance NFData TerminateChildReq where
 
-data TerminateChildResult =
-    TerminateChildOk
-  | TerminateChildUnknownId
-  deriving (Typeable, Generic, Show, Eq)
-instance Binary TerminateChildResult where
-instance NFData TerminateChildResult where
-
-data IgnoreChildReq = IgnoreChildReq !ProcessId
+data IgnoreChildReq = IgnoreChildReq !ChildPid
   deriving (Typeable, Generic)
 instance Binary IgnoreChildReq where
 instance NFData IgnoreChildReq where
@@ -819,13 +533,14 @@ instance Logger LogSink where
   logMessage (LogProcess client') = logMessage client'
 
 data State = State {
-    _specs         :: ChildSpecs
-  , _active        :: Map ProcessId ChildKey
-  , _strategy      :: RestartStrategy
-  , _restartPeriod :: NominalDiffTime
-  , _restarts      :: [UTCTime]
-  , _stats         :: SupervisorStats
-  , _logger        :: LogSink
+    _specs           :: ChildSpecs
+  , _active          :: Map ChildPid ChildKey
+  , _strategy        :: RestartStrategy
+  , _restartPeriod   :: NominalDiffTime
+  , _restarts        :: [UTCTime]
+  , _stats           :: SupervisorStats
+  , _logger          :: LogSink
+  , shutdownStrategy :: ShutdownMode
   }
 
 --------------------------------------------------------------------------------
@@ -837,13 +552,13 @@ data State = State {
 --
 -- > start = spawnLocal . run
 --
-start :: RestartStrategy -> [ChildSpec] -> Process ProcessId
-start s cs = spawnLocal $ run s cs
+start :: RestartStrategy -> ShutdownMode -> [ChildSpec] -> Process SupervisorPid
+start rs ss cs = spawnLocal $ run rs ss cs
 
 -- | Run the supplied children using the provided restart strategy.
 --
-run :: RestartStrategy -> [ChildSpec] -> Process ()
-run strategy' specs' = MP.pserve (strategy', specs') supInit serverDefinition
+run :: RestartStrategy -> ShutdownMode -> [ChildSpec] -> Process ()
+run rs ss specs' = MP.pserve (rs, ss, specs') supInit serverDefinition
 
 --------------------------------------------------------------------------------
 -- Client Facing API                                                          --
@@ -888,7 +603,7 @@ startNewChild addr spec = Unsafe.call addr $ AddChild True spec
 -- 'terminateChild').
 --
 deleteChild :: Addressable a => a -> ChildKey -> Process DeleteChildResult
-deleteChild addr spec = Unsafe.call addr $ DeleteChild spec
+deleteChild sid childKey = Unsafe.call sid $ DeleteChild childKey
 
 -- | Terminate a running child.
 --
@@ -935,8 +650,8 @@ shutdownAndWait sid = do
 -- Server Initialisation/Startup                                              --
 --------------------------------------------------------------------------------
 
-supInit :: InitHandler (RestartStrategy, [ChildSpec]) State
-supInit (strategy', specs') = do
+supInit :: InitHandler (RestartStrategy, ShutdownMode, [ChildSpec]) State
+supInit (strategy', shutdown', specs') = do
   logClient <- Log.client
   let client' = case logClient of
                   Nothing -> LogChan
@@ -946,14 +661,21 @@ supInit (strategy', specs') = do
                     )
                   . (strategy ^= strategy')
                   . (logger   ^= client')
-                  $ emptyState
+                  $ emptyState shutdown'
                   )
   -- TODO: should we return Ignore, as per OTP's supervisor, if no child starts?
-  (foldlM initChild initState specs' >>= return . (flip InitOk) Infinity)
-    `catch` \(e :: SomeException) -> return $ InitStop (show e)
+  catch (foldlM initChild initState specs' >>= return . (flip InitOk) Infinity)
+        (\(e :: SomeException) -> do
+          sup <- getSelfPid
+          logEntry Log.error $
+            mkReport "Could not init supervisor " sup "noproc" (show e)
+          return $ InitStop (show e))
   where
     initChild :: State -> ChildSpec -> Process State
-    initChild st ch = tryStartChild ch >>= initialised st ch
+    initChild st ch =
+      case (findChild (childKey ch) st) of
+        Just (ref, _) -> die $ StartFailureDuplicateChild ref
+        Nothing       -> tryStartChild ch >>= initialised st ch
 
     configuredRestartPeriod =
       let maxT' = maxT (intensity strategy')
@@ -970,8 +692,8 @@ initialised state spec (Right ref) = do
   mPid <- resolve ref
   case mPid of
     Nothing  -> die $ (childKey spec) ++ ": InvalidChildRef"
-    Just pid -> do
-      return $ ( (active ^: Map.insert pid chId)
+    Just childPid -> do
+      return $ ( (active ^: Map.insert childPid chId)
                . (specs  ^: (|> (ref, spec)))
                $ bumpStats Active chType (+1) state
                )
@@ -982,15 +704,16 @@ initialised state spec (Right ref) = do
 -- Server Definition/State                                                    --
 --------------------------------------------------------------------------------
 
-emptyState :: State
-emptyState = State {
-    _specs         = Seq.empty
-  , _active        = Map.empty
-  , _strategy      = restartAll
-  , _restartPeriod = (fromIntegral (0 :: Integer)) :: NominalDiffTime
-  , _restarts      = []
-  , _stats         = emptyStats
-  , _logger        = LogChan
+emptyState :: ShutdownMode -> State
+emptyState strat = State {
+    _specs           = Seq.empty
+  , _active          = Map.empty
+  , _strategy        = restartAll
+  , _restartPeriod   = (fromIntegral (0 :: Integer)) :: NominalDiffTime
+  , _restarts        = []
+  , _stats           = emptyStats
+  , _logger          = LogChan
+  , shutdownStrategy = strat
   }
 
 emptyStats :: SupervisorStats
@@ -1062,13 +785,13 @@ handleAddChild req = getState >>= return . doAddChild req True >>= doReply
 
 handleIgnore :: IgnoreChildReq
                      -> RestrictedProcess State RestrictedAction
-handleIgnore (IgnoreChildReq pid) = do
+handleIgnore (IgnoreChildReq childPid) = do
   {- not only must we take this child out of the `active' field,
      we also delete the child spec if it's restart type is Temporary,
      since restarting Temporary children is dis-allowed -}
   state <- getState
   let (cId, active') =
-        Map.updateLookupWithKey (\_ _ -> Nothing) pid $ state ^. active
+        Map.updateLookupWithKey (\_ _ -> Nothing) childPid $ state ^. active
   case cId of
     Nothing -> Restricted.continue
     Just c  -> do
@@ -1171,11 +894,11 @@ handleDelayedRestart state (DelayedRestartReq key reason) =
   case child of
     Nothing ->
       continue state -- a child could've been terminated and removed by now
-    Just ((ChildRestarting pid), spec) -> do
+    Just ((ChildRestarting childPid), spec) -> do
       -- TODO: we ignore the unnecessary .active re-assignments in
       -- tryRestartChild, in order to keep the code simple - it would be good to
       -- clean this up so we don't have to though...
-      tryRestartChild pid state (state ^. active) spec reason
+      tryRestartChild childPid state (state ^. active) spec reason
 -}
 
 handleTerminateChild :: State
@@ -1202,23 +925,22 @@ handleGetStats _ = Restricted.reply . (^. stats) =<< getState
 handleMonitorSignal :: State
                     -> ProcessMonitorNotification
                     -> Process (ProcessAction State)
-handleMonitorSignal state (ProcessMonitorNotification _ pid reason) = do
+handleMonitorSignal state (ProcessMonitorNotification _ childPid reason) = do
   let (cId, active') =
-        Map.updateLookupWithKey (\_ _ -> Nothing) pid $ state ^. active
+        Map.updateLookupWithKey (\_ _ -> Nothing) childPid $ state ^. active
   let mSpec =
         case cId of
           Nothing -> Nothing
           Just c  -> fmap snd $ findChild c state
   case mSpec of
     Nothing   -> continue $ (active ^= active') state
-    Just spec -> tryRestart pid state active' spec reason
+    Just spec -> tryRestart childPid state active' spec reason
 
 --------------------------------------------------------------------------------
 -- Child Monitoring                                                           --
 --------------------------------------------------------------------------------
 
 handleShutdown :: State -> ExitReason -> Process ()
--- TODO: stop all our children from left to right...
 handleShutdown state (ExitOther reason) = terminateChildren state >> die reason
 handleShutdown state _                  = terminateChildren state
 
@@ -1226,15 +948,18 @@ handleShutdown state _                  = terminateChildren state
 -- Child Start/Restart Handling                                               --
 --------------------------------------------------------------------------------
 
-tryRestart :: ProcessId
+tryRestart :: ChildPid
            -> State
-           -> Map ProcessId ChildKey
+           -> Map ChildPid ChildKey
            -> ChildSpec
            -> DiedReason
            -> Process (ProcessAction State)
-tryRestart pid state active' spec reason = do
+tryRestart childPid state active' spec reason = do
+  sup <- getSelfPid
+  logEntry Log.debug $ do
+    mkReport "tryRestart" sup (childKey spec) (show reason)
   case state ^. strategy of
-    RestartOne _ -> tryRestartChild pid state active' spec reason
+    RestartOne _ -> tryRestartChild childPid state active' spec reason
     strat        -> do
       case (childRestart spec, isNormal reason) of
         (Intrinsic, True) -> stopWith newState ExitNormal
@@ -1260,7 +985,7 @@ tryRestartBranch rs sp dr st = -- TODO: use DiedReason for logging...
                 RestartAll   _ _ -> childSpecs
                 RestartLeft  _ _ -> subTreeL
                 RestartRight _ _ -> subTreeR
-                _                -> error "IllegalState"
+                _                  -> error "IllegalState"
       proc  = case mode' of
                 RestartEach     _ -> stopStart
                 RestartInOrder  _ -> restartL
@@ -1377,17 +1102,17 @@ tryRestartBranch rs sp dr st = -- TODO: use DiedReason for logging...
       -- TODO: report errs
       apply $ foldlM startIt st' tree'
       where
-        asyncTerminate :: Child -> Process (Maybe (ChildKey, ProcessId))
+        asyncTerminate :: Child -> Process (Maybe (ChildKey, ChildPid))
         asyncTerminate (cr, cs) = do
           mPid <- resolve cr
           case mPid of
             Nothing  -> return Nothing
-            Just pid -> do
+            Just childPid -> do
               void $ doTerminateChild cr cs activeState
-              return $ Just (childKey cs, pid)
+              return $ Just (childKey cs, childPid)
 
         collectExits :: ([ExitReason], State)
-                     -> Async (Maybe (ChildKey, ProcessId))
+                     -> Async (Maybe (ChildKey, ChildPid))
                      -> Process ([ExitReason], State)
         collectExits (errs, state) hAsync = do
           -- we perform a blocking wait on each handle, since we'll
@@ -1398,44 +1123,44 @@ tryRestartBranch rs sp dr st = -- TODO: use DiedReason for logging...
             Left err -> return ((err:errs), state)
             Right st -> return (errs, st)
 
-        mergeState :: AsyncResult (Maybe (ChildKey, ProcessId))
+        mergeState :: AsyncResult (Maybe (ChildKey, ChildPid))
                    -> State
                    -> Either ExitReason State
         mergeState (AsyncDone Nothing)           state = Right state
-        mergeState (AsyncDone (Just (key, pid))) state = Right $ mergeIt key pid state
+        mergeState (AsyncDone (Just (key, childPid))) state = Right $ mergeIt key childPid state
         mergeState (AsyncFailed r)               _     = Left $ ExitOther (show r)
         mergeState (AsyncLinkFailed r)           _     = Left $ ExitOther (show r)
         mergeState _                             _     = Left $ ExitOther "IllegalState"
 
-        mergeIt :: ChildKey -> ProcessId -> State -> State
-        mergeIt key pid state =
-          -- TODO: lookup the old ref -> pid and delete from the active map
-          ( (active ^: Map.delete pid)
+        mergeIt :: ChildKey -> ChildPid -> State -> State
+        mergeIt key childPid state =
+          -- TODO: lookup the old ref -> childPid and delete from the active map
+          ( (active ^: Map.delete childPid)
           $ maybe state id (updateChild key (setChildStopped False) state)
           )
     -}
 
-tryRestartChild :: ProcessId
+tryRestartChild :: ChildPid
                 -> State
-                -> Map ProcessId ChildKey
+                -> Map ChildPid ChildKey
                 -> ChildSpec
                 -> DiedReason
                 -> Process (ProcessAction State)
-tryRestartChild pid st active' spec reason
+tryRestartChild childPid st active' spec reason
   | DiedNormal <- reason
   , True       <- isTransient (childRestart spec) = continue childDown
   | True       <- isTemporary (childRestart spec) = continue childRemoved
   | DiedNormal <- reason
   , True       <- isIntrinsic (childRestart spec) = stopWith updateStopped ExitNormal
-  | otherwise     = continue =<< doRestartChild pid spec reason st
+  | otherwise     = doRestartChild childPid spec reason st
   where
     childDown     = (active ^= active') $ updateStopped
     childRemoved  = (active ^= active') $ removeChild spec st
     updateStopped = maybe st id $ updateChild chKey (setChildStopped False) st
     chKey         = childKey spec
 
-doRestartChild :: ProcessId -> ChildSpec -> DiedReason -> State -> Process State
-doRestartChild _ spec _ state = do -- TODO: use ProcessId and DiedReason to log
+doRestartChild :: ChildPid -> ChildSpec -> DiedReason -> State -> Process (ProcessAction State)
+doRestartChild _ spec _ state = do -- TODO: use ChildPid and DiedReason to log
   state' <- addRestart state
   case state' of
     Nothing -> die errorMaxIntensityReached
@@ -1445,26 +1170,33 @@ doRestartChild _ spec _ state = do -- TODO: use ProcessId and DiedReason to log
     Just st -> do
       start' <- doStartChild spec st
       case start' of
-        Right (ref, st') -> do
-          return $ markActive st' ref spec
-        Left _ -> do -- TODO: handle this by policy
+        Right (ref, st') -> continue $ markActive st' ref spec
+        Left err -> do
           -- All child failures are handled via monitor signals, apart from
-          -- BadClosure, which comes back from doStartChild as (Left err).
-          -- Since we cannot recover from that, there's no point in trying
-          -- to start this child again (as the closure will never resolve),
-          -- so we remove the child forthwith. We should provide a policy
-          -- for handling this situation though...
-          return $ ( (active ^: Map.filter (/= chKey))
+          -- BadClosure and UnresolvableAddress from the StarterProcess
+          -- variants of ChildStart, which both come back from
+          -- doStartChild as (Left err).
+          sup <- getSelfPid
+          if isTemporary (childRestart spec)
+             then do
+               logEntry Log.warning $
+                 mkReport "Error in temporary child" sup (childKey spec) (show err)
+               continue $ ( (active ^: Map.filter (/= chKey))
                    . (bumpStats Active chType decrement)
                    . (bumpStats Specified chType decrement)
-                   $ removeChild spec st
-                   )
+                   $ removeChild spec st)
+             else do
+               logEntry Log.error $
+                 mkReport "Unrecoverable error in child. Stopping supervisor"
+                 sup (childKey spec) (show err)
+               stopWith st $ ExitOther $ "Unrecoverable error in child " ++ (childKey spec)
+
   where
     chKey  = childKey spec
     chType = childType spec
 
 {-
-doRestartDelay :: ProcessId
+doRestartDelay :: ChildPid
                -> TimeInterval
                -> ChildSpec
                -> DiedReason
@@ -1511,7 +1243,7 @@ doStartChild spec st = do
       let mState = updateChild chKey (chRunning p) st
       case mState of
         -- TODO: better error message if the child is unrecognised
-        Nothing -> die "InternalError"
+        Nothing -> die $ "InternalError in doStartChild " ++ show spec
         Just s' -> return $ Right $ (p, markActive s' p spec)
   where
     chKey = childKey spec
@@ -1540,12 +1272,12 @@ tryStartChild ChildSpec{..} =
           Left err  -> logStartFailure $ StartFailureBadClosure err
           Right fn' -> do
             wrapHandle childRegName fn' >>= return . Right
-      StarterProcess restarterPid ->
-          wrapRestarterProcess childRegName restarterPid
+      StarterProcess starterPid ->
+          wrapRestarterProcess childRegName starterPid
   where
     logStartFailure sf = do
       sup <- getSelfPid
-      logEntry Log.error $ mkReport "Child Start Error" sup "noproc" (show sf)
+      logEntry Log.error $ mkReport "Child Start Error" sup childKey (show sf)
       return $ Left sf
 
     wrapClosure :: Maybe RegisteredName
@@ -1553,7 +1285,7 @@ tryStartChild ChildSpec{..} =
                 -> Process ChildRef
     wrapClosure regName proc = do
       supervisor <- getSelfPid
-      pid <- spawnLocal $ do
+      childPid <- spawnLocal $ do
         self <- getSelfPid
         link supervisor -- die if our parent dies
         maybeRegister regName self
@@ -1564,30 +1296,31 @@ tryStartChild ChildSpec{..} =
           `catchesExit` [
             (\_ m -> handleMessageIf m (== ExitShutdown)
                                        (\_ -> return ()))]
-      void $ monitor pid
-      send pid ()
-      return $ ChildRunning pid
+      void $ monitor childPid
+      send childPid ()
+      return $ ChildRunning childPid
 
     wrapHandle :: Maybe RegisteredName
-               -> (SupervisorPid -> Process (ProcessId, Message))
+               -> (SupervisorPid -> Process (ChildPid, Message))
                -> Process ChildRef
     wrapHandle regName proc = do
       super <- getSelfPid
-      (pid, msg) <- proc super
-      maybeRegister regName pid
-      return $ ChildRunningExtra pid msg
+      (childPid, msg) <- proc super
+      maybeRegister regName childPid
+      void $ monitor childPid
+      return $ ChildRunningExtra childPid msg
 
     wrapRestarterProcess :: Maybe RegisteredName
-                         -> ProcessId
+                         -> StarterPid
                          -> Process (Either StartFailure ChildRef)
-    wrapRestarterProcess regName restarterPid = do
-      selfPid <- getSelfPid
+    wrapRestarterProcess regName starterPid = do
+      sup <- getSelfPid
       (sendPid, recvPid) <- newChan
-      ref <- monitor restarterPid
-      send restarterPid (selfPid, childKey, sendPid)
+      ref <- monitor starterPid
+      send starterPid (sup, childKey, sendPid)
       ePid <- receiveWait [
                 -- TODO: tighten up this contract to correct for erroneous mail
-                matchChan recvPid (\(pid :: ProcessId) -> return $ Right pid)
+                matchChan recvPid (\(pid :: ChildPid) -> return $ Right pid)
               , matchIf (\(ProcessMonitorNotification mref _ dr) ->
                            mref == ref && dr /= DiedNormal)
                         (\(ProcessMonitorNotification _ _ dr) ->
@@ -1601,7 +1334,7 @@ tryStartChild ChildSpec{..} =
         Left dr -> return $ Left $ StartFailureDied dr
 
 
-    maybeRegister :: Maybe RegisteredName -> ProcessId -> Process ()
+    maybeRegister :: Maybe RegisteredName -> ChildPid -> Process ()
     maybeRegister Nothing                         _     = return ()
     maybeRegister (Just (LocalName n))            pid   = register n pid
     maybeRegister (Just (GlobalName _))           _     = return ()
@@ -1613,14 +1346,20 @@ tryStartChild ChildSpec{..} =
           Left err -> die $ ExitOther (show err)
           Right p  -> p pid
 
-filterInitFailures :: ProcessId
-                   -> ProcessId
+filterInitFailures :: SupervisorPid
+                   -> ChildPid
                    -> ChildInitFailure
                    -> Process ()
-filterInitFailures sup pid ex = do
+filterInitFailures sup childPid ex = do
   case ex of
-    ChildInitFailure _ -> liftIO $ throwIO ex
-    ChildInitIgnore    -> Unsafe.cast sup $ IgnoreChildReq pid
+    ChildInitFailure _ -> do
+      -- This is used as a `catches` handler in multiple places
+      -- and matches first before the other handlers that
+      -- would call logFailure.
+      -- We log here to avoid silent failure in those cases.
+      logEntry Log.error $ mkReport "ChildInitFailure" sup (show childPid) (show ex)
+      liftIO $ throwIO ex
+    ChildInitIgnore    -> Unsafe.cast sup $ IgnoreChildReq childPid
 
 --------------------------------------------------------------------------------
 -- Child Termination/Shutdown                                                 --
@@ -1628,21 +1367,35 @@ filterInitFailures sup pid ex = do
 
 terminateChildren :: State -> Process ()
 terminateChildren state = do
-  let allChildren = toList $ state ^. specs
-  pids <- forM allChildren $ \ch -> do
-    pid <- spawnLocal $ asyncTerminate ch $ (active ^= Map.empty) state
-    void $ monitor pid
-    return pid
-  _ <- collectExits [] pids
-  -- TODO: report errs???
-  return ()
+  case (shutdownStrategy state) of
+    ParallelShutdown -> do
+      let allChildren = toList $ state ^. specs
+      terminatorPids <- forM allChildren $ \ch -> do
+        pid <- spawnLocal $ void $ syncTerminate ch $ (active ^= Map.empty) state
+        void $ monitor pid
+        return pid
+      terminationErrors <- collectExits [] terminatorPids
+      -- it seems these would also be logged individually in doTerminateChild
+      case terminationErrors of
+        [] -> return ()
+        _ -> do
+          sup <- getSelfPid
+          void $ logEntry Log.error $
+            mkReport "Errors in terminateChildren / ParallelShutdown"
+            sup "n/a" (show terminationErrors)
+    SequentialShutdown ord -> do
+      let specs'      = state ^. specs
+      let allChildren = case ord of
+                          RightToLeft -> Seq.reverse specs'
+                          LeftToRight -> specs'
+      void $ foldlM (flip syncTerminate) state (toList allChildren)
   where
-    asyncTerminate :: Child -> State -> Process ()
-    asyncTerminate (cr, cs) state' = void $ doTerminateChild cr cs state'
+    syncTerminate :: Child -> State -> Process State
+    syncTerminate (cr, cs) state' = doTerminateChild cr cs state'
 
-    collectExits :: [DiedReason]
-                 -> [ProcessId]
-                 -> Process [DiedReason]
+    collectExits :: [(ProcessId, DiedReason)]
+                 -> [ChildPid]
+                 -> Process [(ProcessId, DiedReason)]
     collectExits errors []   = return errors
     collectExits errors pids = do
       (pid, reason) <- receiveWait [
@@ -1651,8 +1404,8 @@ terminateChildren state = do
         ]
       let remaining = List.delete pid pids
       case reason of
-        DiedNormal -> collectExits errors          remaining
-        _          -> collectExits (reason:errors) remaining
+        DiedNormal -> collectExits errors                 remaining
+        _          -> collectExits ((pid, reason):errors) remaining
 
 doTerminateChild :: ChildRef -> ChildSpec -> State -> Process State
 doTerminateChild ref spec state = do
@@ -1666,8 +1419,8 @@ doTerminateChild ref spec state = do
                $ state'
                )
   where
-    shutdownComplete :: State -> ProcessId -> DiedReason -> Process State
-    shutdownComplete _ _ DiedNormal               = return $ updateStopped
+    shutdownComplete :: State -> ChildPid -> DiedReason -> Process State
+    shutdownComplete _      _   DiedNormal        = return $ updateStopped
     shutdownComplete state' pid (r :: DiedReason) = do
       logShutdown (state' ^. logger) chKey pid r >> return state'
 
@@ -1675,31 +1428,31 @@ doTerminateChild ref spec state = do
     updateStopped = maybe state id $ updateChild chKey (setChildStopped False) state
 
 childShutdown :: ChildTerminationPolicy
-              -> ProcessId
+              -> ChildPid
               -> State
               -> Process DiedReason
-childShutdown policy pid st = do
+childShutdown policy childPid st = do
   case policy of
-    (TerminateTimeout t) -> exit pid ExitShutdown >> await pid t st
+    (TerminateTimeout t) -> exit childPid ExitShutdown >> await childPid t st
     -- we ignore DiedReason for brutal kills
     TerminateImmediately -> do
-      kill pid "TerminatedBySupervisor"
-      void $ await pid Infinity st
+      kill childPid "TerminatedBySupervisor"
+      void $ await childPid Infinity st
       return DiedNormal
   where
-    await :: ProcessId -> Delay -> State -> Process DiedReason
-    await pid' delay state = do
-      let monitored = (Map.member pid' $ state ^. active)
+    await :: ChildPid -> Delay -> State -> Process DiedReason
+    await childPid' delay state = do
+      let monitored = (Map.member childPid' $ state ^. active)
       let recv = case delay of
-                   Infinity -> receiveWait (matches pid') >>= return . Just
-                   NoDelay  -> receiveTimeout 0 (matches pid')
-                   Delay t  -> receiveTimeout (asTimeout t) (matches pid')
-      -- we set up an additional monitor here, since child shutdown can occur
-      -- during a restart which was triggered by the /old/ monitor signal
-      let recv' =  if monitored then recv else withMonitor pid' recv
-      recv' >>= maybe (childShutdown TerminateImmediately pid' state) return
+                   Infinity -> receiveWait (matches childPid') >>= return . Just
+                   NoDelay  -> receiveTimeout 0 (matches childPid')
+                   Delay t  -> receiveTimeout (asTimeout t) (matches childPid')
+      -- We require and additional monitor here when child shutdown occurs
+      -- during a restart which was triggered by the /old/ monitor signal.
+      let recv' =  if monitored then recv else withMonitor childPid' recv
+      recv' >>= maybe (childShutdown TerminateImmediately childPid' state) return
 
-    matches :: ProcessId -> [Match DiedReason]
+    matches :: ChildPid -> [Match DiedReason]
     matches p = [
           matchIf (\(ProcessMonitorNotification _ p' _) -> p == p')
                   (\(ProcessMonitorNotification _ _ r) -> return r)
@@ -1712,23 +1465,23 @@ childShutdown policy pid st = do
 errorMaxIntensityReached :: ExitReason
 errorMaxIntensityReached = ExitOther "ReachedMaxRestartIntensity"
 
-logShutdown :: LogSink -> ChildKey -> ProcessId -> DiedReason -> Process ()
-logShutdown log' child pid reason = do
-    self <- getSelfPid
-    Log.info log' $ mkReport banner self (show pid) shutdownReason
+logShutdown :: LogSink -> ChildKey -> ChildPid -> DiedReason -> Process ()
+logShutdown log' child childPid reason = do
+    sup <- getSelfPid
+    Log.info log' $ mkReport banner sup (show childPid) shutdownReason
   where
     banner         = "Child Shutdown Complete"
     shutdownReason = (show reason) ++ ", child-key: " ++ child
 
-logFailure :: ProcessId -> ProcessId -> SomeException -> Process ()
-logFailure sup pid ex = do
-  logEntry Log.notice $ mkReport "Detected Child Exit" sup (show pid) (show ex)
+logFailure :: SupervisorPid -> ChildPid -> SomeException -> Process ()
+logFailure sup childPid ex = do
+  logEntry Log.notice $ mkReport "Detected Child Exit" sup (show childPid) (show ex)
   liftIO $ throwIO ex
 
 logEntry :: (LogChan -> LogText -> Process ()) -> String -> Process ()
 logEntry lg = Log.report lg Log.logChannel
 
-mkReport :: String -> ProcessId -> String -> String -> String
+mkReport :: String -> SupervisorPid -> String -> String -> String
 mkReport b s c r = foldl' (\x xs -> xs ++ " " ++ x) "" items
   where
     items :: [String]
@@ -1755,7 +1508,7 @@ setChildStopped ignored child prefix remaining st =
     False -> Just $ (specs ^= prefix >< ((newRef, spec) <| remaining)) st
 
 {-
-setChildRestarting :: ProcessId -> Child -> Prefix -> Suffix -> State -> Maybe State
+setChildRestarting :: ChildPid -> Child -> Prefix -> Suffix -> State -> Maybe State
 setChildRestarting oldPid child prefix remaining st =
   let spec   = snd child
       newRef = ChildRestarting oldPid
@@ -1793,7 +1546,7 @@ removeChild spec state =
 markActive :: State -> ChildRef -> ChildSpec -> State
 markActive state ref spec =
   case ref of
-    ChildRunning (pid :: ProcessId) -> inserted pid
+    ChildRunning (pid :: ChildPid)   -> inserted pid
     ChildRunningExtra pid _         -> inserted pid
     _                               -> error $ "InternalError"
   where
@@ -1825,7 +1578,7 @@ isTransient = (== Transient)
 isIntrinsic :: RestartPolicy -> Bool
 isIntrinsic = (== Intrinsic)
 
-active :: Accessor State (Map ProcessId ChildKey)
+active :: Accessor State (Map ChildPid ChildKey)
 active = accessor _active (\act' st -> st { _active = act' })
 
 strategy :: Accessor State RestartStrategy

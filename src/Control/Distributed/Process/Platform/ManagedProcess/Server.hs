@@ -165,7 +165,7 @@ hibernate_ :: TimeInterval -> (s -> Process (ProcessAction s))
 hibernate_ d = return . ProcessHibernate d
 
 -- | Instructs the process to terminate, giving the supplied reason. If a valid
--- 'terminateHandler' is installed, it will be called with the 'ExitReason'
+-- 'shutdownHandler' is installed, it will be called with the 'ExitReason'
 -- returned from this call, along with the process state.
 stop :: ExitReason -> Process (ProcessAction s)
 stop r = return $ ProcessStop r
@@ -498,7 +498,7 @@ handleDispatchIf cond handler = DispatchIf {
                 (CastMessage p)   -> (h s p)
                 (ChanMessage p _) -> (h s p)
 
--- | Creates a generic input handler (i.e., for recieved messages that are /not/
+-- | Creates a generic input handler (i.e., for received messages that are /not/
 -- sent using the 'cast' or 'call' APIs) from an ordinary function in the
 -- 'Process' monad.
 handleInfo :: forall s a. (Serializable a)
