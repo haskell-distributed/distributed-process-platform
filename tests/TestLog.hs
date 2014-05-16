@@ -4,7 +4,7 @@
 module Main where
 
 -- import Control.Exception (SomeException)
-import Control.Concurrent.MVar (MVar, newMVar, takeMVar, putMVar)
+import Control.Concurrent.MVar (MVar, newMVar, takeMVar, putMVar, newEmptyMVar)
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TChan
 import Control.Distributed.Process hiding (monitor)
@@ -60,40 +60,36 @@ testLoggingProcess = do
 
 testLogLevels :: (Log.Logger logger, ToLog tL)
               => MVar ()
+              -> TChan String
               -> logger
               -> LogLevel
               -> LogLevel
               -> (LogLevel -> tL)
               -> TestResult Bool
               -> Process ()
-testLogLevels lck logger from to fn result = do
+testLogLevels lck chan logger from to fn result = do
   void $ liftIO $ takeMVar lck
-  infoPair <- testLoggingProcess
   let lvls = enumFromTo from to
   logIt logger fn lvls
-  testHarness lvls infoPair result
-
-  let pid = fst infoPair
-  kill pid "finished"
-  awaitExit pid
+  testHarness lvls chan result
   liftIO $ putMVar lck ()
   where
     logIt _  _ []     = return ()
     logIt lc f (l:ls) = sendLog lc (f l) l >> logIt lc f ls
 
 testHarness :: [LogLevel]
-            -> (ProcessId, TChan String)
+            -> TChan String
             -> TestResult Bool
             -> Process ()
-testHarness []     (_, chan)   result = do
+testHarness []     chan result = do
   liftIO (atomically (isEmptyTChan chan)) >>= stash result
-testHarness levels p@(_, chan) result = do
+testHarness levels chan result = do
   msg <- liftIO $ atomically $ readTChan chan
   -- liftIO $ putStrLn $ "testHarness handling " ++ msg
   let item = readEither msg
   case item of
-    Right i -> testHarness (delete i levels) p result
-    Left  _ -> testHarness levels            p result
+    Right i -> testHarness (delete i levels) chan result
+    Left  _ -> testHarness levels            chan result
   where
     readEither :: String -> Either String LogLevel
     readEither s =
@@ -111,19 +107,23 @@ tests transport = do
   let ch = logChannel
   localNode <- newLocalNode transport $ __remoteTable initRemoteTable
   lock <- newMVar ()
+  ex <- newEmptyMVar
+  void $ forkProcess localNode $ do (_, chan) <- testLoggingProcess
+                                    liftIO $ putMVar ex chan
+  chan <- takeMVar ex
   return [
       testGroup "Log Reports / LogText"
-        (map (mkTestCase lock ch simpleShowToLog localNode) (enumFromTo Debug Emergency))
+        (map (mkTestCase lock chan ch simpleShowToLog localNode) (enumFromTo Debug Emergency))
     , testGroup "Logging Raw Messages"
-        (map (mkTestCase lock ch messageToLog localNode) (enumFromTo Debug Emergency))
+        (map (mkTestCase lock chan ch messageToLog localNode) (enumFromTo Debug Emergency))
     , testGroup "Custom Formatters"
-        (map (mkTestCase lock ch messageRaw localNode) (enumFromTo Debug Emergency))
+        (map (mkTestCase lock chan ch messageRaw localNode) (enumFromTo Debug Emergency))
     ]
   where
-    mkTestCase lck ch' rdr ln lvl = do
+    mkTestCase lck chan ch' rdr ln lvl = do
       let l = show lvl
       testCase l (delayedAssertion ("Expected up to " ++ l)
-                  ln True $ testLogLevels lck ch' Debug lvl rdr)
+                  ln True $ testLogLevels lck chan ch' Debug lvl rdr)
 
     simpleShowToLog = (LogText . show)
     messageToLog    = unsafeWrapMessage . show
