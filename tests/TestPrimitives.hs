@@ -4,7 +4,7 @@
 module Main where
 
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar)
+import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar)
 import Control.Distributed.Process
 import Control.Distributed.Process.Node
 import Control.Distributed.Process.Serializable()
@@ -13,6 +13,7 @@ import Control.Distributed.Process.Platform hiding (__remoteTable, monitor, send
 import qualified Control.Distributed.Process.Platform (__remoteTable)
 import Control.Distributed.Process.Platform.Call
 import Control.Distributed.Process.Platform.Service.Monitoring
+import qualified Control.Distributed.Process.Platform.Service.Linking as Alt
 import Control.Distributed.Process.Platform.Time
 import Control.Monad (void)
 import Control.Rematch hiding (match)
@@ -132,11 +133,36 @@ testMonitorNodeDeath transport result = do
   liftIO $ closeLocalNode node4
   stash result ()
 
-  where
-    ensureNodeRunning mvar nid = do
-      us <- getSelfNode
-      liftIO $ putMVar mvar us
-      sendTo nid "connected"
+testBiDirectionalLinking :: NT.Transport -> TestResult Bool -> Process ()
+testBiDirectionalLinking transport result = do
+  spawnLocal $ void $ Alt.linkManager
+
+  void $ spawnLocal expect
+
+  pid1 <- spawnLocal expect
+
+  Alt.link pid1
+
+  -- a "normal" exit should not trigger the link...
+  send pid1 ()
+  awaitExit pid1
+
+  testPid <- getSelfPid
+  pid2 <- spawnLocal $ Alt.link testPid >> expect
+
+  kill pid2 "goodbye"
+
+  -- a "non-normal" exit of pid2 should trigger *our* death though...
+  catchExit (kill pid2 "bye bye") $ \died exitReason -> do
+    case exitReason of
+      ExitOther _ -> stash result $ died == pid2
+      _           -> stash result False
+
+ensureNodeRunning :: MVar NodeId -> (NodeId, String) -> Process ()
+ensureNodeRunning mvar nid = do
+  us <- getSelfNode
+  liftIO $ putMVar mvar us
+  sendTo nid "connected"
 
 myRemoteTable :: RemoteTable
 myRemoteTable = Control.Distributed.Process.Platform.__remoteTable initRemoteTable
@@ -202,6 +228,13 @@ tests transport localNode = [
           "subscribers should both have received NodeDown twice"
           localNode () (testMonitorNodeDeath transport))
       ]
+    {-,
+    testGroup "Alternate Links" [
+        testCase "Bi-Directional Linking"
+         (delayedAssertion
+          "links should generate bi-directional exit signals on non-normal exit"
+          localNode True (testBiDirectionalLinking transport))
+      ]-}
   ]
 
 primitivesTests :: NT.Transport -> IO [Test]
