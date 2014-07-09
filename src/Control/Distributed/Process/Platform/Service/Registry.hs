@@ -62,6 +62,7 @@ module Control.Distributed.Process.Platform.Service.Registry
   , Registry(..)
   , start
   , run
+  , namedRegistry  
     -- * Registration / Unregistration
   , addName
   , addProperty
@@ -222,15 +223,22 @@ instance (Show a, Eq a, Hashable a, Serializable a) => Keyable a
 
 -- | A phantom type, used to parameterise registry startup
 -- with the required key and value types.
-data Registry k v = Registry { registryPid :: ProcessId }
+data Registry k v = Registry      { registryPid  :: ProcessId }
+                  | NamedRegistry { registryName :: String    }
   deriving (Typeable, Generic, Show, Eq)
 instance (Keyable k, Serializable v) => Binary (Registry k v) where
 
 instance Resolvable (Registry k v) where
-  resolve = return . Just . registryPid
-
+  resolve (Registry pid)       = return $ Just pid
+  resolve (NamedRegistry name) = whereis name
+  
 instance Linkable (Registry k v) where
-  linkTo = link . registryPid
+  linkTo (Registry pid)       = link pid
+  linkTo (NamedRegistry name) = do
+    mPid <- whereis name
+    case mPid of
+      Nothing -> return ()
+      Just p  -> link p
 
 -- Internal/Private Request/Response Types
 
@@ -447,6 +455,11 @@ run _ =
 --------------------------------------------------------------------------------
 -- Client Facing API                                                          --
 --------------------------------------------------------------------------------
+
+namedRegistry :: forall k v. (Keyable k, Serializable v)
+              => String
+              -> Registry k v
+namedRegistry = NamedRegistry
 
 -- -- | Sends a message to the process, or processes, corresponding to @key@.
 -- -- If Key belongs to a unique object (name or aggregated counter), this

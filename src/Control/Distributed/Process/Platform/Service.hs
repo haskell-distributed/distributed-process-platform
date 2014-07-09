@@ -31,7 +31,50 @@ module Control.Distributed.Process.Platform.Service
     module Control.Distributed.Process.Platform.Service.Monitoring
     -- * Service Registry
   , module Control.Distributed.Process.Platform.Service.Registry
+  , module Control.Distributed.Process.Platform.Service.Linking
+    -- * Core Service Establishment
+  , startCoreServices
+  , serviceRegistry
+  , serviceRegistryName
   ) where
 
+import Control.Distributed.Process
+  ( Process
+  , die
+  , register
+  )
+import Control.Distributed.Process.Platform 
+  ( Resolvable(..)
+  )
+import Control.Distributed.Process.Management (MxAgentId)
 import Control.Distributed.Process.Platform.Service.Monitoring
 import Control.Distributed.Process.Platform.Service.Registry
+import Control.Distributed.Process.Platform.Service.Linking
+import Control.Monad (void)
+
+import qualified Control.Distributed.Process.Platform.Service.Registry as Registry (start)
+
+startCoreServices :: Process ()
+startCoreServices = do
+  void $ startServiceRegistry
+  registerAgent (show nodeMonitorAgentId) =<< nodeMonitor
+  registerAgent (show linkManagerAgentId) =<< linkManager
+  where
+    registerAgent = registerName serviceRegistry >>= verify
+    
+    verify RegisteredOk = return ()
+    verify _            = die "AlreadyRegistered"
+
+serviceRegistry :: Registry MxAgentId String
+serviceRegistry = namedRegistry serviceRegistryName
+
+serviceRegistryName :: String
+serviceRegistryName = "service.registry"
+
+startServiceRegistry :: Process (Registry MxAgentId String)
+startServiceRegistry = do
+  reg <- Registry.start
+  Just pid <- resolve reg
+  register serviceRegistryName pid
+  return serviceRegistry
+

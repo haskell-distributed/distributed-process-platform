@@ -31,6 +31,7 @@
 module Control.Distributed.Process.Platform.Service.Linking
   ( linkManager
   , linkManagerAgentId
+  , linkManagerAgentName
   , link
   ) where
 
@@ -79,6 +80,7 @@ link pid = do
   (sp, rp) <- newChan
   nsend linkManagerAgentName (BiDirectionalLink self pid sp)
   BiDirectionalLinkOk <- receiveChan rp
+  liftIO $ putStrLn "link established"
   return ()
 
 -- | The @MxAgentId@ for the link management agent.
@@ -99,6 +101,7 @@ linkManager = do
             liftMX $ sendChan sender BiDirectionalLinkOk
             mxReady)
       , (mxSink $ \(MxProcessDied pid reason) -> do
+            liftIO $ putStrLn "process died"
             case reason of
               DiedNormal -> mxReady
               -- technically, we cannot receive DiedUnknownId here,
