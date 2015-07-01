@@ -1,5 +1,5 @@
 # distribributed-process-platform
-[![travis](https://secure.travis-ci.org/haskell-distributed/distributed-process-platform.png)](http://travis-ci.org/haskell-distributed/distributed-process-async)
+[![travis](https://secure.travis-ci.org/haskell-distributed/distributed-process-platform.png)](http://travis-ci.org/haskell-distributed/distributed-process-platform)
 ![Release](https://img.shields.io/hackage/v/distributed-process-platform.svg)
 
 azure-service-api is made available under a BSD-3 license.
