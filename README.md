@@ -1,6 +1,6 @@
 # distribributed-process-platform
 [![travis](https://secure.travis-ci.org/haskell-distributed/distributed-process-platform.png)](http://travis-ci.org/haskell-distributed/distributed-process-platform)
-![Release](https://img.shields.io/hackage/v/distributed-process-platform.svg)
+[![Release](https://img.shields.io/hackage/v/distributed-process-platform.svg)](http://hackage.haskell.org/package/distributed-process-platform)
 
 azure-service-api is made available under a BSD-3 license.
 This repository is part of Cloud Haskell.
