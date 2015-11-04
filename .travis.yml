@@ -1,25 +1,31 @@
-language: haskell
+language: c
 
-env:
-  matrix:
-    - GHCVER=7.4.2
-    - GHCVER=7.6.1
-    - GHCVER=7.6.2
-    - GHCVER=7.6.3
-  global:
-    - CABALVER=1.18
+sudo: false
+
+matrix:
+  include:
+    - env: CABALVER=1.22 GHCVER=7.6.3
+      addons: {apt: {packages: [cabal-install-1.22,ghc-7.6.3], sources: [hvr-ghc]}}
+    - env: CABALVER=1.22 GHCVER=7.8.4
+      addons: {apt: {packages: [cabal-install-1.22,ghc-7.8.4], sources: [hvr-ghc]}}
+    - env: CABALVER=1.22 GHCVER=7.10.2
+      addons: {apt: {packages: [cabal-install-1.22,ghc-7.10.2],sources: [hvr-ghc]}}
 
 before_install:
-  - rm -rf travis
-  - git clone http://github.com/haskell-distributed/haskell-distributed-travis travis
-  - source travis/scripts/set_env.sh
-  - ./travis/scripts/before_install.sh
+  - export PATH=/opt/ghc/$GHCVER/bin:/opt/cabal/$CABALVER/bin:~/.cabal/bin:$PATH
+  - ghc --version
+  - cabal --version
+  - cabal update
+  # workaround for https://ghc.haskell.org/trac/ghc/ticket/9221
+  # taken from https://github.com/hvr/multi-ghc-travis/blob/0fa68f78c2b1b059f904c9abc85510a3bb4f57e2/README.md
+  - sed -i 's/^jobs:/-- jobs:/' $HOME/.cabal/config
 
 install:
-  - ./travis/scripts/install.sh
+  - cabal install --jobs=2 --enable-tests --only-dependencies .
 
 script:
-  - ./travis/scripts/script.sh
+  - cabal configure --enable-tests
+  - cabal test --show-details=streaming --test-options="--plain"
 
 notifications:
   email:
@@ -31,4 +37,3 @@ notifications:
     use_notice: true
     template:
       - "\x0313d-p-platform\x03/\x0306%{branch}\x03 \x0314%{commit}\x03 %{build_url} %{message}"
-
